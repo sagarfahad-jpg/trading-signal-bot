@@ -1,0 +1,27 @@
+# بيانات حساسة — لا تُرفع أبداً
+.env
+
+# ملفات بيانات مؤقتة
+signals_log.json
+asset_thresholds.json
+watchlist.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# بيئة افتراضية
+venv/
+env/
+.venv/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
