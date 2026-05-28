@@ -1,14 +1,16 @@
 """
-Trading Signal Bot — Dashboard
+Trading Signal Bot — Dashboard v2
 شغّله بـ:  streamlit run dashboard.py
 """
 
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.express as px
 from plotly.subplots import make_subplots
 import json, os
 from datetime import datetime
+import pytz
 import yfinance as yf
 
 import sys
@@ -29,14 +31,81 @@ st.set_page_config(
 
 st.markdown("""
 <style>
+    /* ─── عام ─── */
     [data-testid="stMetricValue"] { font-size: 2rem; }
     .win  { color: #00c853; font-weight: 700; }
     .loss { color: #ff1744; font-weight: 700; }
-    .call { color: #00e676; }
-    .put  { color: #ff5252; }
-    div[data-testid="stSidebarContent"] { background: #0f0f1a; }
+
+    /* ─── Sidebar ─── */
+    [data-testid="stSidebarContent"],
+    section[data-testid="stSidebar"] > div:first-child {
+        background-color: #0a0a16 !important;
+    }
+    section[data-testid="stSidebar"] * {
+        color: #d8d8e8 !important;
+    }
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3,
+    section[data-testid="stSidebar"] strong {
+        color: #ffffff !important;
+    }
+    section[data-testid="stSidebar"] hr {
+        border-color: #2a2a40 !important;
+    }
+    /* أزرار الحذف */
+    section[data-testid="stSidebar"] button {
+        background: #1e1e30 !important;
+        border: 1px solid #2e2e4a !important;
+        color: #ff5252 !important;
+        border-radius: 6px !important;
+    }
+    section[data-testid="stSidebar"] button:hover {
+        background: #2b0d0d !important;
+        border-color: #ff5252 !important;
+    }
+    /* شريط التمرير */
+    section[data-testid="stSidebar"] [role="slider"] {
+        background-color: #00e676 !important;
+    }
+    /* حقل النص */
+    section[data-testid="stSidebar"] input {
+        background: #141428 !important;
+        border: 1px solid #2e2e4a !important;
+        color: #fff !important;
+        border-radius: 6px !important;
+    }
+    /* ─── بطاقات قائمة الأصول ─── */
+    .wl-item {
+        background: #12122a;
+        border: 1px solid #2a2a48;
+        border-radius: 8px;
+        padding: 7px 12px;
+        margin: 4px 0;
+        font-size: .95rem;
+        font-weight: 600;
+        color: #e8e8ff !important;
+    }
+    .card-call {
+        background: linear-gradient(135deg,#0d2b18,#0a1f12);
+        border: 1.5px solid #00e676; border-radius: 14px;
+        padding: 18px 14px; text-align: center;
+    }
+    .card-put {
+        background: linear-gradient(135deg,#2b0d0d,#1f0a0a);
+        border: 1.5px solid #ff5252; border-radius: 14px;
+        padding: 18px 14px; text-align: center;
+    }
+    .card-sym  { font-size:1.9rem; font-weight:900; margin:0; }
+    .card-dir  { font-size:1.1rem; margin:4px 0 12px; }
+    .card-row  { display:flex; justify-content:space-between;
+                 font-size:.85rem; color:#ccc; margin:3px 0; }
+    .card-val  { font-weight:700; color:#fff; }
+    .score-bar-wrap { background:#1e1e2e; border-radius:8px;
+                      height:8px; margin:10px 0 4px; overflow:hidden; }
+    .score-bar { height:8px; border-radius:8px; }
 </style>
-<meta http-equiv="refresh" content="300">
+<meta http-equiv="refresh" content="60">
 """, unsafe_allow_html=True)
 
 
@@ -53,27 +122,37 @@ def load_log() -> list:
     return []
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60)
 def scan_all(min_score: float) -> pd.DataFrame:
     rows = []
-    for sym in config.WATCHLIST:
+    for sym in load_watchlist():
         s = quick_scan(sym)
         if s:
             is_opportunity = s["score"] >= min_score and s["rr"] >= 1.5
             rows.append({
                 "الأصل"  : sym,
                 "الاتجاه": "🟢 CALL" if s["direction"] == "call" else "🔴 PUT",
-                "التقييم": s["score"],
-                "RSI"    : s["rsi"],
-                "R:R"    : s["rr"],
-                "السعر"  : round(s["price"], 2),
+                "التقييم": round(s["score"],    1),
+                "RSI"    : round(s["rsi"],       1),
+                "R:R"    : round(s["rr"],        2),
+                "السعر"  : round(s["price"],     2),
                 "دخول"   : f"{s['entry_low']:.2f}–{s['entry_high']:.2f}",
-                "وقف"    : s["stop"],
-                "هدف 1"  : s["target1"],
-                "هدف 2"  : s["target2"],
-                "OB"     : "✅" if (s["bull_ob"] or s["bear_ob"]) else "—",
-                "FVG"    : "✅" if (s["bull_fvg"] or s["bear_fvg"]) else "—",
+                "وقف"    : round(s["stop"],      2),
+                "هدف 1"  : round(s["target1"],   2),
+                "هدف 2"  : round(s["target2"],   2),
+                "OB"     : "✅" if (s["bull_ob"]    or s["bear_ob"])    else "—",
+                "FVG"    : "✅" if (s["bull_fvg"]   or s["bear_fvg"])   else "—",
+                "Div"    : "✅" if (s.get("bull_div")  or s.get("bear_div"))  else "—",
+                "Break"  : "✅" if (s.get("bull_break") or s.get("bear_break")) else "—",
+                "Sweep"  : "✅" if (s.get("bull_sweep") or s.get("bear_sweep")) else "—",
                 "فرصة؟"  : "✅" if is_opportunity else "❌",
+                "_score_raw": s["score"],
+                "_dir_raw"  : s["direction"],
+                "_entry_low": s["entry_low"],
+                "_entry_high": s["entry_high"],
+                "_stop"     : s["stop"],
+                "_t1"       : s["target1"],
+                "_t2"       : s["target2"],
             })
         else:
             rows.append({
@@ -81,6 +160,8 @@ def scan_all(min_score: float) -> pd.DataFrame:
                 "RSI": "—", "R:R": 0, "السعر": 0, "دخول": "—",
                 "وقف": "—", "هدف 1": "—", "هدف 2": "—",
                 "OB": "—", "FVG": "—", "فرصة؟": "❌",
+                "_score_raw": 0, "_dir_raw": "", "_entry_low": 0,
+                "_entry_high": 0, "_stop": 0, "_t1": 0, "_t2": 0,
             })
     df = pd.DataFrame(rows)
     return df.sort_values("التقييم", ascending=False).reset_index(drop=True)
@@ -94,11 +175,32 @@ def fetch_chart(symbol: str):
 
 def outcome_stats(log: list):
     sent = [e for e in log if e.get("sent")]
-    outcomes = [e for e in sent if e.get("outcome") and "WIN" in str(e.get("outcome",""))]
-    losses   = [e for e in sent if e.get("outcome") and "LOSS" in str(e.get("outcome",""))]
-    total_decided = len(outcomes) + len(losses)
-    win_rate = round(len(outcomes) / total_decided * 100) if total_decided > 0 else 0
-    return len(sent), len(outcomes), len(losses), win_rate
+    wins   = [e for e in sent if "WIN"  in str(e.get("outcome", ""))]
+    losses = [e for e in sent if "LOSS" in str(e.get("outcome", ""))]
+    total_decided = len(wins) + len(losses)
+    win_rate = round(len(wins) / total_decided * 100) if total_decided > 0 else 0
+    return len(sent), len(wins), len(losses), win_rate
+
+
+def get_market_status():
+    """يُرجع (is_open, label, minutes_left)"""
+    et  = pytz.timezone(config.TIMEZONE)
+    now = datetime.now(et)
+    if now.weekday() >= 5:
+        return False, "مغلق — عطلة نهاية الأسبوع", None
+    open_t  = now.replace(hour=9,  minute=35, second=0, microsecond=0)
+    close_t = now.replace(hour=15, minute=45, second=0, microsecond=0)
+    if now < open_t:
+        mins = int((open_t - now).total_seconds() / 60)
+        h, m = divmod(mins, 60)
+        label = f"مغلق — يفتح بعد {h}س {m}د" if h else f"مغلق — يفتح بعد {m} دقيقة"
+        return False, label, mins
+    if now > close_t:
+        return False, "مغلق — أغلق السوق اليوم", None
+    mins = int((close_t - now).total_seconds() / 60)
+    h, m = divmod(mins, 60)
+    label = f"مفتوح ✅ — يغلق بعد {h}س {m}د" if h else f"مفتوح ✅ — يغلق بعد {m} دقيقة"
+    return True, label, mins
 
 
 # ─── Watchlist helpers ────────────────────────────────────────────────────────
@@ -124,15 +226,31 @@ def save_watchlist(wl: list):
 st.sidebar.title("⚙️ إعدادات العرض")
 min_score_ui = st.sidebar.slider("حد الفرصة (Score)", 0.0, 10.0, config.MIN_SCORE, 0.5)
 
-current_wl = load_watchlist()
+current_wl  = load_watchlist()
 selected_sym = st.sidebar.selectbox("رسم بياني للأصل", current_wl)
 show_levels  = st.sidebar.checkbox("عرض مستويات الإشارة على الرسم", value=True)
 
 st.sidebar.divider()
 st.sidebar.subheader("📋 قائمة الأصول")
+
+threshold_file = os.path.join(os.path.dirname(__file__), "asset_thresholds.json")
+_thresholds = {}
+try:
+    with open(threshold_file, encoding="utf-8") as _f:
+        _thresholds = json.load(_f)
+except Exception:
+    pass
+
 for sym in list(current_wl):
-    c1s, c2s = st.sidebar.columns([3, 1])
-    c1s.write(sym)
+    c1s, c2s = st.sidebar.columns([4, 1])
+    thresh = _thresholds.get(sym, config.MIN_SCORE)
+    c1s.markdown(
+        f'<div class="wl-item">'
+        f'<span style="color:#fff;">{sym}</span>'
+        f'<span style="color:#888;font-size:.75rem;">حد {thresh}</span>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
     if c2s.button("🗑", key=f"del_{sym}"):
         current_wl.remove(sym)
         save_watchlist(current_wl)
@@ -145,7 +263,7 @@ if st.sidebar.button("إضافة") and new_sym and new_sym not in current_wl:
     st.rerun()
 
 st.sidebar.divider()
-st.sidebar.caption("🔄 الصفحة تتحدث تلقائياً كل 5 دقائق")
+st.sidebar.caption("🔄 الصفحة تتحدث تلقائياً كل 60 ثانية")
 if st.sidebar.button("🔄 تحديث الآن"):
     st.cache_data.clear()
     st.rerun()
@@ -153,14 +271,61 @@ if st.sidebar.button("🔄 تحديث الآن"):
 
 # ─── Header ───────────────────────────────────────────────────────────────────
 
-c1, c2 = st.columns([3, 1])
-with c1:
-    st.title("🤖 Trading Signal Bot")
-    st.caption(f"آخر تحديث: {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}")
-with c2:
-    vix = get_vix()
-    vix_color = "🟢" if vix < 20 else ("🟡" if vix < 28 else "🔴")
-    st.metric(f"{vix_color} VIX", f"{vix:.1f}")
+st.title("🤖 Trading Signal Bot")
+st.caption(f"آخر تحديث: {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}")
+
+# ── Market Status Banner ───────────────────────────────────────────────────────
+
+is_open, market_label, mins_left = get_market_status()
+vix = get_vix()
+
+banner_color = "#0d2b18" if is_open else "#1a1a1a"
+border_color = "#00e676" if is_open else "#ff5252"
+status_icon  = "🟢" if is_open else "🔴"
+
+col_status, col_vix = st.columns([3, 1])
+
+with col_status:
+    st.markdown(f"""
+    <div style="background:{banner_color}; border:1.5px solid {border_color};
+                border-radius:12px; padding:16px 20px; margin-bottom:8px;">
+        <span style="font-size:1.6rem; font-weight:900; color:{border_color};">
+            {status_icon} السوق — {market_label}
+        </span>
+        <br>
+        <span style="color:#aaa; font-size:.9rem;">
+            توقيت نيويورك (ET) &nbsp;|&nbsp;
+            الفحص كل {config.SCAN_INTERVAL_MINUTES} دقيقة
+            {f'&nbsp;|&nbsp; <b style="color:{border_color};">يبدأ الفحص الأول بعد {mins_left} دقيقة</b>' if not is_open and mins_left else ''}
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col_vix:
+    vix_color = "#00c853" if vix < 20 else ("#ffd740" if vix < 28 else "#ff1744")
+    vix_label = "هادئ" if vix < 20 else ("متوسط" if vix < 28 else "مرتفع ⚠️")
+    fig_vix = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=vix,
+        number=dict(font=dict(color=vix_color, size=32)),
+        gauge=dict(
+            axis=dict(range=[0, 45], tickcolor="white", tickfont=dict(color="white")),
+            bar=dict(color=vix_color, thickness=0.35),
+            bgcolor="#1e1e2e",
+            steps=[
+                dict(range=[0,  20], color="#0d2b18"),
+                dict(range=[20, 28], color="#2b2700"),
+                dict(range=[28, 45], color="#2b0d0d"),
+            ],
+            threshold=dict(line=dict(color=vix_color, width=3), thickness=0.75, value=vix),
+        ),
+        title=dict(text=f"VIX — {vix_label}", font=dict(color="white", size=13)),
+    ))
+    fig_vix.update_layout(
+        height=160, margin=dict(l=10, r=10, t=30, b=0),
+        paper_bgcolor="rgba(0,0,0,0)", font_color="white",
+    )
+    st.plotly_chart(fig_vix, width="stretch")
 
 st.divider()
 
@@ -178,39 +343,174 @@ k4.metric("📅 إشارات اليوم", len(today_signals))
 
 st.divider()
 
-# ─── Main content ─────────────────────────────────────────────────────────────
+# ─── Tabs ─────────────────────────────────────────────────────────────────────
 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 مسح الأصول", "📋 سجل الإشارات", "📈 الرسم البياني", "🧪 Backtest"])
 
 
 # ── Tab 1: Asset Scanner ───────────────────────────────────────────────────────
 with tab1:
-    st.subheader("مسح الأصول الحالي")
     with st.spinner("جاري تحليل الأصول..."):
         df_scan = scan_all(min_score_ui)
 
-    # لون الصفوف حسب الفرصة
-    def color_row(row):
-        if row["فرصة؟"] == "✅" and "CALL" in str(row["الاتجاه"]):
-            return ["background-color: #0d2b0d"] * len(row)
-        elif row["فرصة؟"] == "✅" and "PUT" in str(row["الاتجاه"]):
-            return ["background-color: #2b0d0d"] * len(row)
-        return [""] * len(row)
+    # ── Heatmap ──────────────────────────────────────────────────────────────
+    st.subheader("🌡️ خريطة حرارية للأصول")
 
-    st.dataframe(
-        df_scan.style.apply(color_row, axis=1),
-        width="stretch",
-        height=420,
+    df_heat = df_scan[df_scan["التقييم"] > 0].copy()
+    if not df_heat.empty:
+        # بناء matrix: الأصول × المؤشرات
+        heat_syms   = df_heat["الأصل"].tolist()
+        heat_scores = df_heat["التقييم"].tolist()
+        heat_rsi    = [float(r) if str(r).replace('.','').isdigit() else 50 for r in df_heat["RSI"]]
+        heat_rr     = df_heat["R:R"].tolist()
+
+        # تطبيع RSI: قرب 30 = فرصة كول، قرب 70 = فرصة بوت → نحوّله لقيمة محايدة
+        heat_rsi_norm = [abs(r - 50) / 50 * 10 for r in heat_rsi]
+
+        z_matrix  = [heat_scores, heat_rsi_norm, heat_rr]
+        y_labels  = ["التقييم", "RSI (بُعد عن 50)", "R:R"]
+
+        fig_heat = go.Figure(go.Heatmap(
+            z=z_matrix,
+            x=heat_syms,
+            y=y_labels,
+            colorscale=[
+                [0.0,  "#2b0d0d"],
+                [0.35, "#5c2a00"],
+                [0.6,  "#1a3a1a"],
+                [1.0,  "#00c853"],
+            ],
+            text=[[f"{v:.1f}" for v in row] for row in z_matrix],
+            texttemplate="%{text}",
+            textfont=dict(size=13, color="white"),
+            showscale=True,
+            colorbar=dict(tickfont=dict(color="white"), title=dict(text="قوة", font=dict(color="white"))),
+        ))
+        fig_heat.update_layout(
+            height=220,
+            paper_bgcolor="#0f0f1a", plot_bgcolor="#0f0f1a",
+            font_color="white",
+            margin=dict(l=10, r=10, t=10, b=10),
+            xaxis=dict(side="top", tickfont=dict(size=13, color="white")),
+            yaxis=dict(tickfont=dict(size=11, color="white")),
+        )
+        st.plotly_chart(fig_heat, width="stretch")
+    else:
+        st.info("لا تتوفر بيانات كافية للخريطة الحرارية.")
+
+    st.divider()
+
+    # ── Opportunity Cards ─────────────────────────────────────────────────────
+    ready = df_scan[df_scan["فرصة؟"] == "✅"].head(5)
+
+    if not ready.empty:
+        st.subheader(f"🎯 الفرص الجاهزة الآن ({len(ready)})")
+        card_cols = st.columns(min(len(ready), 5))
+
+        for i, (_, row) in enumerate(ready.iterrows()):
+            is_call   = "CALL" in str(row["الاتجاه"])
+            dir_color = "#00e676" if is_call else "#ff5252"
+            dir_ar    = "كول 🟢" if is_call else "بوت 🔴"
+            card_cls  = "card-call" if is_call else "card-put"
+            score_pct = min(row["التقييم"] / 10 * 100, 100)
+            mid_entry = round((row["_entry_low"] + row["_entry_high"]) / 2, 2)
+
+            with card_cols[i]:
+                st.markdown(f"""
+                <div class="{card_cls}">
+                    <p class="card-sym" style="color:{dir_color};">{row['الأصل']}</p>
+                    <p class="card-dir" style="color:{dir_color};">{dir_ar}</p>
+                    <div class="score-bar-wrap">
+                        <div class="score-bar"
+                             style="width:{score_pct:.0f}%;background:{dir_color};"></div>
+                    </div>
+                    <p style="font-size:.75rem;color:#aaa;margin:0 0 10px;">
+                        تقييم {row['التقييم']:.1f} / 10
+                    </p>
+                    <div class="card-row">
+                        <span>دخول مقترح</span>
+                        <span class="card-val">{mid_entry}</span>
+                    </div>
+                    <div class="card-row">
+                        <span>هدف ١</span>
+                        <span class="card-val" style="color:#00e676;">{row['هدف 1']}</span>
+                    </div>
+                    <div class="card-row">
+                        <span>هدف ٢</span>
+                        <span class="card-val" style="color:#00e676;">{row['هدف 2']}</span>
+                    </div>
+                    <div class="card-row">
+                        <span>وقف</span>
+                        <span class="card-val" style="color:#ff5252;">{row['وقف']}</span>
+                    </div>
+                    <div class="card-row">
+                        <span>R:R</span>
+                        <span class="card-val">{row['R:R']}</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+    else:
+        st.info("لا توجد فرص تستوفي الشروط حالياً — انتظر الفحص القادم.")
+
+    st.divider()
+
+    # ── Full Table ────────────────────────────────────────────────────────────
+    st.subheader("📋 مسح كامل للأصول")
+
+    display_cols = ["الأصل","الاتجاه","التقييم","RSI","R:R","السعر","دخول","وقف","هدف 1","هدف 2","OB","FVG","Div","Break","Sweep","فرصة؟"]
+    df_display   = df_scan[display_cols]
+
+    fmt = {
+        "التقييم": "{:.1f}",
+        "RSI"    : "{:.1f}",
+        "R:R"    : "{:.2f}",
+        "السعر"  : "{:.2f}",
+        "وقف"    : "{:.2f}",
+        "هدف 1"  : "{:.2f}",
+        "هدف 2"  : "{:.2f}",
+    }
+
+    # تحويل الأعمدة لأرقام لتطبيق الـ gradient
+    df_num = df_display.copy()
+    df_num["التقييم"] = pd.to_numeric(df_num["التقييم"], errors="coerce")
+    df_num["RSI"]     = pd.to_numeric(df_num["RSI"],     errors="coerce")
+    df_num["R:R"]     = pd.to_numeric(df_num["R:R"],     errors="coerce")
+
+    styled = (
+        df_num.style
+        # ── تدرج لوني على التقييم: أحمر(0) → أصفر(5) → أخضر(10)
+        .background_gradient(
+            subset=["التقييم"],
+            cmap="RdYlGn",
+            vmin=2, vmax=9,
+        )
+        # ── تدرج لوني على R:R: أحمر(1) → أخضر(4+)
+        .background_gradient(
+            subset=["R:R"],
+            cmap="RdYlGn",
+            vmin=1.0, vmax=4.0,
+        )
+        # ── RSI: الأطراف خطر، المنتصف آمن (مقلوب عن المنتصف)
+        .background_gradient(
+            subset=["RSI"],
+            cmap="RdYlGn_r",
+            vmin=25, vmax=75,
+        )
+        # ── تمييز صفوف الفرص بحد جانبي فقط (بدون تغيير الخلفية)
+        .apply(lambda row: [
+            "border-right: 4px solid #00e676; font-weight:600"
+            if row["فرصة؟"] == "✅" and "CALL" in str(row["الاتجاه"])
+            else (
+                "border-right: 4px solid #ff5252; font-weight:600"
+                if row["فرصة؟"] == "✅" and "PUT" in str(row["الاتجاه"])
+                else ""
+            )
+            for _ in row
+        ], axis=1)
+        .format(fmt, na_rep="—")
     )
 
-    # الفرص الجاهزة فقط
-    ready = df_scan[df_scan["فرصة؟"] == "✅"]
-    if not ready.empty:
-        st.success(f"✅ {len(ready)} فرصة تستوفي الشروط الآن")
-        st.dataframe(ready[["الأصل","الاتجاه","التقييم","RSI","R:R","OB","FVG","دخول","وقف","هدف 1","هدف 2"]],
-                     width="stretch")
-    else:
-        st.info("لا توجد فرص تستوفي الشروط حالياً")
+    st.dataframe(styled, width="stretch", height=400)
 
 
 # ── Tab 2: Signal History ──────────────────────────────────────────────────────
@@ -219,7 +519,7 @@ with tab2:
     if not log:
         st.info("لا توجد إشارات مسجّلة بعد.")
     else:
-        df_log = pd.DataFrame(log[::-1])   # الأحدث أولاً
+        df_log = pd.DataFrame(log[::-1])
         cols_show = ["timestamp","symbol","direction","confidence","score","rr","vix","mtf_score",
                      "entry_low","entry_high","stop","target1","target2","sent","outcome"]
         cols_show = [c for c in cols_show if c in df_log.columns]
@@ -232,8 +532,8 @@ with tab2:
         })
 
         def color_outcome(val):
-            if val and "WIN" in str(val):   return "color: #00c853; font-weight:bold"
-            if val and "LOSS" in str(val):  return "color: #ff1744; font-weight:bold"
+            if val and "WIN"  in str(val): return "color: #00c853; font-weight:bold"
+            if val and "LOSS" in str(val): return "color: #ff1744; font-weight:bold"
             return ""
 
         st.dataframe(
@@ -242,7 +542,6 @@ with tab2:
             height=500,
         )
 
-        # أداء مرئي
         if wins + losses > 0:
             st.subheader("📊 الأداء الإجمالي")
             fig_pie = go.Figure(go.Pie(
@@ -257,8 +556,8 @@ with tab2:
                 annotations=[{"text": f"{win_rate}%", "font_size": 28,
                                "showarrow": False, "font_color": "white"}],
             )
-            c_a, c_b, c_c = st.columns([1,1,1])
-            with c_b:
+            ca, cb, cc = st.columns([1,1,1])
+            with cb:
                 st.plotly_chart(fig_pie, width="stretch")
 
 
@@ -278,7 +577,6 @@ with tab3:
             vertical_spacing=0.03,
         )
 
-        # شموع
         fig.add_trace(go.Candlestick(
             x=df_chart.index,
             open=df_chart["Open"], high=df_chart["High"],
@@ -288,7 +586,6 @@ with tab3:
             decreasing_line_color="#ff5252",
         ), row=1, col=1)
 
-        # SMA
         sma10 = df_chart["Close"].rolling(10).mean()
         sma30 = df_chart["Close"].rolling(30).mean()
         fig.add_trace(go.Scatter(x=df_chart.index, y=sma10, name="SMA10",
@@ -296,18 +593,16 @@ with tab3:
         fig.add_trace(go.Scatter(x=df_chart.index, y=sma30, name="SMA30",
                                   line=dict(color="#40c4ff", width=1)), row=1, col=1)
 
-        # مستويات الإشارة
         if show_levels and signal:
-            last_t = df_chart.index[-1]
+            last_t  = df_chart.index[-1]
             first_t = df_chart.index[max(0, len(df_chart) - 40)]
             color_d = "#00e676" if signal.direction == "call" else "#ff5252"
-
             for level, label, dash in [
-                (signal.entry_low,  "دخول↓",  "dash"),
-                (signal.entry_high, "دخول↑",  "dash"),
-                (signal.stop,       "وقف",     "dot"),
-                (signal.target1,    "هدف 1",   "longdash"),
-                (signal.target2,    "هدف 2",   "longdash"),
+                (signal.entry_low,  "دخول↓", "dash"),
+                (signal.entry_high, "دخول↑", "dash"),
+                (signal.stop,       "وقف",    "dot"),
+                (signal.target1,    "هدف 1",  "longdash"),
+                (signal.target2,    "هدف 2",  "longdash"),
             ]:
                 lc = "#ff1744" if label == "وقف" else ("#ffd740" if "دخول" in label else color_d)
                 fig.add_shape(type="line", x0=first_t, x1=last_t, y0=level, y1=level,
@@ -316,7 +611,6 @@ with tab3:
                                    showarrow=False, xanchor="left",
                                    font=dict(color=lc, size=11), row=1, col=1)
 
-        # حجم التداول
         vol_colors = ["#00e676" if c >= o else "#ff5252"
                       for c, o in zip(df_chart["Close"], df_chart["Open"])]
         fig.add_trace(go.Bar(x=df_chart.index, y=df_chart["Volume"],
@@ -334,8 +628,8 @@ with tab3:
         st.plotly_chart(fig, width="stretch")
 
         if signal:
-            dir_ar = "كول 🟢" if signal.direction == "call" else "بوت 🔴"
-            conf   = "عالية 🟢" if signal.confidence == "high" else "متوسطة 🟡"
+            dir_ar    = "كول 🟢" if signal.direction == "call" else "بوت 🔴"
+            conf      = "عالية 🟢" if signal.confidence == "high" else "متوسطة 🟡"
             suggested = round((signal.entry_low + signal.entry_high) / 2, 2)
             st.info(
                 f"**{selected_sym}** | {dir_ar} | تقييم: **{signal.score:.1f}** | "
@@ -368,7 +662,6 @@ with tab4:
 
         st.divider()
 
-        # نتائج كل أصل
         st.subheader("أداء كل أصل")
         rows = []
         for sym, s in bt_data["symbol_stats"].items():
@@ -383,7 +676,6 @@ with tab4:
         df_stats = pd.DataFrame(rows).sort_values("WR %", ascending=False)
         st.dataframe(df_stats, width="stretch")
 
-        # جدول الإشارات التاريخية
         if bt_data["all_results"]:
             st.divider()
             st.subheader("سجل الإشارات التاريخية")
@@ -403,8 +695,8 @@ with tab4:
                 width="stretch", height=400,
             )
 
-            # رسم بياني للأداء عبر الزمن
-            df_bt["win"] = df_bt["outcome"].apply(lambda x: 1 if "WIN" in x else (-1 if "LOSS" in x else 0))
+            df_bt["win"] = df_bt["outcome"].apply(
+                lambda x: 1 if "WIN" in str(x) else (-1 if "LOSS" in str(x) else 0))
             df_bt["cum_wins"] = (df_bt["win"] == 1).cumsum()
             df_bt["cum_loss"] = (df_bt["win"] == -1).cumsum()
 

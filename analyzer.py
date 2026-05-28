@@ -5,6 +5,7 @@ import numpy as np
 import yfinance as yf
 from datetime import datetime
 import pytz
+import data_client
 
 
 @dataclass
@@ -93,6 +94,80 @@ def _find_order_blocks(df: pd.DataFrame) -> List[Tuple[float, float, str]]:
     return obs[-8:]
 
 
+def _rsi_divergence(df: pd.DataFrame, lookback: int = 30) -> Tuple[bool, bool]:
+    """
+    RSI Divergence — انعكاس قوي:
+    bull_div : السعر قاع أدنى + RSI قاع أعلى  → فرصة CALL
+    bear_div : السعر قمة أعلى + RSI قمة أدنى  → فرصة PUT
+    """
+    if len(df) < lookback:
+        return False, False
+    recent   = df.tail(lookback)
+    prices   = recent['Close']
+    rsi_vals = _rsi(prices).dropna()
+    if len(rsi_vals) < lookback // 2:
+        return False, False
+
+    half = lookback // 2
+    p1, p2 = prices.iloc[:half],      prices.iloc[half:]
+    r1, r2 = rsi_vals.iloc[:half],    rsi_vals.iloc[half:]
+
+    # Bullish: price → lower low  |  RSI → higher low
+    bull = (p2.min() < p1.min() * 0.9995) and (r2.min() > r1.min() * 1.01)
+    # Bearish: price → higher high  |  RSI → lower high
+    bear = (p2.max() > p1.max() * 1.0005) and (r2.max() < r1.max() * 0.99)
+    return bool(bull), bool(bear)
+
+
+def _find_breakers(df: pd.DataFrame, price: float) -> Tuple[bool, bool]:
+    """
+    Breaker Block (ICT) — Order Block انكسر وتحوّل لمستوى معاكس:
+    bull_breaker : OB هابط اخترقه السعر للأعلى → صار دعماً (CALL)
+    bear_breaker : OB صاعد اخترقه السعر للأسفل → صار مقاومة (PUT)
+    """
+    obs         = _find_order_blocks(df)
+    prox        = 0.007        # 0.7% قرب من المستوى
+    bull_break  = bear_break = False
+
+    for lo, hi, ob_type in obs:
+        if ob_type == 'bearish' and price > hi:
+            # OB هابط انكسر للأعلى → أصبح دعم
+            if abs(price - hi) / price < prox:
+                bull_break = True
+        elif ob_type == 'bullish' and price < lo:
+            # OB صاعد انكسر للأسفل → أصبح مقاومة
+            if abs(price - lo) / price < prox:
+                bear_break = True
+    return bull_break, bear_break
+
+
+def _liquidity_sweep(df: pd.DataFrame, lookback: int = 40) -> Tuple[bool, bool]:
+    """
+    Liquidity Sweep (ICT Stop Hunt) — السعر يمسح الـ Stops ثم ينعكس:
+    bull_sweep : ذيل الشمعة مسح تحت القيعان ثم أغلق فوقها → CALL
+    bear_sweep : ذيل الشمعة مسح فوق القمم ثم أغلق دونها  → PUT
+    """
+    if len(df) < lookback:
+        return False, False
+
+    recent      = df.tail(lookback)
+    anchor_end  = int(lookback * 0.70)
+    anchor      = recent.iloc[:anchor_end]
+    tail        = recent.iloc[anchor_end:]
+
+    anchor_low  = float(anchor['Low'].min())
+    anchor_high = float(anchor['High'].max())
+    tail_low    = float(tail['Low'].min())
+    tail_high   = float(tail['High'].max())
+    tail_close  = float(tail['Close'].iloc[-1])
+
+    # ذيل نزل تحت القاع ثم أغلق فوقه
+    bull_sweep = (tail_low < anchor_low * 0.9995) and (tail_close > anchor_low)
+    # ذيل صعد فوق القمة ثم أغلق دونها
+    bear_sweep = (tail_high > anchor_high * 1.0005) and (tail_close < anchor_high)
+    return bool(bull_sweep), bool(bear_sweep)
+
+
 # ─── Filters ──────────────────────────────────────────────────────────────────
 
 def get_vix() -> float:
@@ -129,7 +204,7 @@ def has_earnings_soon(symbol: str, days: int = 2) -> bool:
 def _quick_direction(symbol: str, interval: str, period: str) -> Optional[str]:
     """Fast direction check on a single timeframe. Returns 'call', 'put', or None."""
     try:
-        df = yf.Ticker(symbol).history(period=period, interval=interval, auto_adjust=True)
+        df = data_client.get_bars(symbol, interval, period)
         if df.empty or len(df) < 30:
             return None
         price  = float(df['Close'].iloc[-1])
@@ -176,9 +251,8 @@ def quick_scan(symbol: str) -> Optional[dict]:
     تحليل سريع للـ Dashboard: يُرجع التقييم والاتجاه بدون جلب Options أو MTF.
     """
     try:
-        ticker = yf.Ticker(symbol)
-        df5  = ticker.history(period='2d',  interval='5m',  auto_adjust=True)
-        df1d = ticker.history(period='30d', interval='1d',  auto_adjust=True)
+        df5  = data_client.get_bars(symbol, '5m', '2d')
+        df1d = data_client.get_bars(symbol, '1d', '30d')
         if df5.empty or len(df5) < 40 or df1d.empty or len(df1d) < 15:
             return None
 
@@ -221,6 +295,10 @@ def quick_scan(symbol: str) -> Optional[dict]:
         bull_ob  = any(lo <= price <= hi * 1.003 for lo, hi, t in obs if t == 'bullish')
         bear_ob  = any(lo * 0.997 <= price <= hi  for lo, hi, t in obs if t == 'bearish')
 
+        bull_div,   bear_div   = _rsi_divergence(df5)
+        bull_break, bear_break = _find_breakers(recent, price)
+        bull_sweep, bear_sweep = _liquidity_sweep(df5)
+
         bs = ps = 0.0
         if rsi < 30: bs += 3.0
         elif rsi < 40 and rsi_rising: bs += 2.0
@@ -230,10 +308,16 @@ def quick_scan(symbol: str) -> Optional[dict]:
         elif rsi > 50 and not rsi_rising: ps += 1.0
         if at_sup or near_pdl:   bs += 2.5
         if at_res or near_pdh:   ps += 2.5
-        if bull_fvg: bs += 1.5
-        if bear_fvg: ps += 1.5
-        if bull_ob:  bs += 2.0
-        if bear_ob:  ps += 2.0
+        if bull_fvg:   bs += 1.5
+        if bear_fvg:   ps += 1.5
+        if bull_ob:    bs += 2.0
+        if bear_ob:    ps += 2.0
+        if bull_div:   bs += 2.5
+        if bear_div:   ps += 2.5
+        if bull_break: bs += 1.5
+        if bear_break: ps += 1.5
+        if bull_sweep: bs += 1.5
+        if bear_sweep: ps += 1.5
         if price > sma10 and price > sma30: bs += 0.5
         if price < sma10 and price < sma30: ps += 0.5
         if not np.isnan(sma200d):
@@ -286,6 +370,12 @@ def quick_scan(symbol: str) -> Optional[dict]:
             "bear_ob"   : bear_ob,
             "bull_fvg"  : bull_fvg,
             "bear_fvg"  : bear_fvg,
+            "bull_div"  : bull_div,
+            "bear_div"  : bear_div,
+            "bull_break": bull_break,
+            "bear_break": bear_break,
+            "bull_sweep": bull_sweep,
+            "bear_sweep": bear_sweep,
         }
     except Exception as e:
         return None
@@ -303,9 +393,8 @@ def analyze(
 ) -> Optional[SignalResult]:
 
     try:
-        ticker = yf.Ticker(symbol)
-        df5  = ticker.history(period='3d',  interval='5m',  auto_adjust=True)
-        df1d = ticker.history(period='60d', interval='1d',  auto_adjust=True)
+        df5  = data_client.get_bars(symbol, '5m', '3d')
+        df1d = data_client.get_bars(symbol, '1d', '60d')
 
         if df5.empty or len(df5) < 60 or df1d.empty or len(df1d) < 20:
             return None
@@ -359,6 +448,11 @@ def analyze(
         bull_ob  = any(lo <= price <= hi * 1.003 for lo, hi, t in obs if t == 'bullish')
         bear_ob  = any(lo * 0.997 <= price <= hi  for lo, hi, t in obs if t == 'bearish')
 
+        # ── مفاهيم ICT المتقدمة ───────────────────────────────────────────────
+        bull_div,   bear_div   = _rsi_divergence(df5)
+        bull_break, bear_break = _find_breakers(recent, price)
+        bull_sweep, bear_sweep = _liquidity_sweep(df5)
+
         # ── Scoring ───────────────────────────────────────────────────────────
         bs = ps = 0.0
 
@@ -373,10 +467,22 @@ def analyze(
         if at_sup or near_pdl:   bs += 2.5
         if at_res or near_pdh:   ps += 2.5
 
-        if bull_fvg: bs += 1.5
-        if bear_fvg: ps += 1.5
-        if bull_ob:  bs += 2.0
-        if bear_ob:  ps += 2.0
+        if bull_fvg:   bs += 1.5
+        if bear_fvg:   ps += 1.5
+        if bull_ob:    bs += 2.0
+        if bear_ob:    ps += 2.0
+
+        # RSI Divergence — إشارة انعكاس قوية
+        if bull_div:   bs += 2.5
+        if bear_div:   ps += 2.5
+
+        # Breaker Block — مستوى ICT مقلوب
+        if bull_break: bs += 1.5
+        if bear_break: ps += 1.5
+
+        # Liquidity Sweep — مسح الـ Stops ثم انعكاس
+        if bull_sweep: bs += 1.5
+        if bear_sweep: ps += 1.5
 
         if price > sma10 and price > sma30: bs += 0.5
         if price < sma10 and price < sma30: ps += 0.5
@@ -416,7 +522,11 @@ def analyze(
             min_t1     = entry_high + atr * 0.5
             target1    = round(near_res if (resistances and near_res > min_t1) else min_t1, 2)
             target2    = round(target1 + atr * 0.6, 2)
-            entry_type = 'إعادة اختبار' if (at_sup or near_pdl) else 'اختراق'
+            if bull_div:    entry_type = 'RSI Divergence 📐'
+            elif bull_sweep: entry_type = 'Liquidity Sweep 🌊'
+            elif bull_break: entry_type = 'Breaker Block 🔄'
+            elif at_sup or near_pdl: entry_type = 'إعادة اختبار'
+            else:           entry_type = 'اختراق'
         else:
             base       = near_res if at_res else (price + atr * 0.2)
             entry_high = round(base, 2)
@@ -425,7 +535,11 @@ def analyze(
             max_t1     = entry_low - atr * 0.5
             target1    = round(near_sup if (supports and near_sup < max_t1) else max_t1, 2)
             target2    = round(target1 - atr * 0.6, 2)
-            entry_type = 'إعادة اختبار' if (at_res or near_pdh) else 'اختراق'
+            if bear_div:    entry_type = 'RSI Divergence 📐'
+            elif bear_sweep: entry_type = 'Liquidity Sweep 🌊'
+            elif bear_break: entry_type = 'Breaker Block 🔄'
+            elif at_res or near_pdh: entry_type = 'إعادة اختبار'
+            else:           entry_type = 'اختراق'
 
         # ── فلتر Risk/Reward ──────────────────────────────────────────────────
         entry_mid = (entry_low + entry_high) / 2
