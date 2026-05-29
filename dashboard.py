@@ -1339,6 +1339,49 @@ with tab5:
                 )
                 st.plotly_chart(fig_dir, use_container_width=True)
 
+            # ── هيت ماب أفضل ساعات التداول ──────────────────────────────────────
+            st.subheader("⏰ أفضل ساعات التداول")
+            st.caption("Win Rate حسب ساعة الإرسال (توقيت ET)")
+
+            try:
+                _et_tz = pytz.timezone(config.TIMEZONE)
+                df_h   = decided.copy()
+                df_h["hour"] = (
+                    pd.to_datetime(df_h["created_at"], utc=True)
+                    .dt.tz_convert(_et_tz)
+                    .dt.hour
+                )
+                h_grp = df_h.groupby("hour").agg(
+                    total=("status", "count"),
+                    wins =("status", lambda x: (x.isin(["hit_t1","hit_t2"])).sum()),
+                ).reset_index()
+                h_grp["wr"]    = (h_grp["wins"] / h_grp["total"] * 100).round(1)
+                h_grp["label"] = h_grp["hour"].apply(
+                    lambda h: f"{h:02d}:00–{h+1:02d}:00")
+
+                fig_h = go.Figure(go.Bar(
+                    x=h_grp["label"],
+                    y=h_grp["wr"],
+                    text=[f"{v:.0f}%<br>({t})" for v, t in
+                          zip(h_grp["wr"], h_grp["total"])],
+                    textposition="outside",
+                    marker_color=[
+                        "#00c853" if v >= 60 else ("#ffd740" if v >= 45 else "#ff5252")
+                        for v in h_grp["wr"]
+                    ],
+                ))
+                fig_h.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="white", height=260, showlegend=False,
+                    yaxis=dict(range=[0, 110], gridcolor="#1e1e2e",
+                               title=dict(text="Win Rate %", font=dict(color="#aaa"))),
+                    xaxis=dict(gridcolor="#1e1e2e"),
+                    margin=dict(l=10, r=10, t=10, b=10),
+                )
+                st.plotly_chart(fig_h, use_container_width=True)
+            except Exception:
+                st.info("بيانات غير كافية لعرض هيت ماب الساعات.")
+
             st.divider()
 
         # ── جدول الإشارات الأخيرة ──────────────────────────────────────────────

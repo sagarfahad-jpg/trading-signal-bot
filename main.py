@@ -236,6 +236,83 @@ def _outcome_loop():
             pass
 
 
+# ─── Daily summary ────────────────────────────────────────────────────────────
+
+_daily_summary_sent_date: str = ""
+
+def _send_daily_summary() -> None:
+    """يرسل ملخص اليوم على Telegram بعد إغلاق السوق."""
+    if not db.is_configured():
+        return
+    try:
+        et       = pytz.timezone(config.TIMEZONE)
+        today    = datetime.now(et).strftime("%Y-%m-%d")
+        signals  = db.get_all_signals(limit=300)
+        today_s  = [s for s in signals
+                    if str(s.get("created_at",""))[:10] == today]
+        if not today_s:
+            return
+
+        decided  = [s for s in today_s
+                    if s.get("status") in ("hit_t1","hit_t2","stopped")]
+        wins     = [s for s in decided if s.get("status") in ("hit_t1","hit_t2")]
+        losses   = [s for s in decided if s.get("status") == "stopped"]
+        total_r  = round(sum(float(s.get("r_multiple") or 0) for s in decided), 2)
+        open_cnt = len([s for s in today_s if s.get("status") == "open"])
+
+        best = (max(decided, key=lambda x: float(x.get("r_multiple") or 0))
+                if decided else None)
+        worst= (min(decided, key=lambda x: float(x.get("r_multiple") or 0))
+                if decided else None)
+
+        r_sign  = "+" if total_r >= 0 else ""
+        r_emoji = "📈" if total_r >= 0 else "📉"
+        wr_pct  = round(len(wins)/len(decided)*100) if decided else 0
+
+        lines = [
+            f"📊 ملخص اليوم — {today}",
+            f"{'─'*30}",
+            f"إشارات: {len(today_s)}  |  محسومة: {len(decided)}  |  مفتوحة: {open_cnt}",
+            f"✅ فوز: {len(wins)}  ❌ خسارة: {len(losses)}  🎯 WR: {wr_pct}%",
+        ]
+        if best:
+            lines.append(
+                f"⭐ الأفضل: {best['symbol']} {best['direction'].upper()}"
+                f" +{float(best.get('r_multiple',0)):.1f}R"
+            )
+        if worst and worst != best:
+            lines.append(
+                f"👎 الأسوأ: {worst['symbol']} {worst['direction'].upper()}"
+                f" {float(worst.get('r_multiple',0)):.1f}R"
+            )
+        lines += [
+            f"{'─'*30}",
+            f"{r_emoji} إجمالي اليوم: {r_sign}{total_r}R",
+        ]
+        send("\n".join(lines), config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
+        print("📊 أُرسل ملخص اليوم")
+    except Exception as e:
+        print(f"  [daily_summary] {e}")
+
+
+def _daily_summary_loop() -> None:
+    """يفحص كل دقيقة — يرسل الملخص الساعة 3:50 م ET أيام الأسبوع."""
+    global _daily_summary_sent_date
+    et = pytz.timezone(config.TIMEZONE)
+    while True:
+        time.sleep(60)
+        try:
+            now       = datetime.now(et)
+            today_str = now.strftime("%Y-%m-%d")
+            if (now.weekday() < 5
+                    and now.hour == 15 and now.minute >= 50
+                    and today_str != _daily_summary_sent_date):
+                _send_daily_summary()
+                _daily_summary_sent_date = today_str
+        except Exception as exc:
+            print(f"  [daily_summary] {exc}")
+
+
 # ─── Weekly report ────────────────────────────────────────────────────────────
 
 _weekly_report_sent_date: str = ""   # تتبع تاريخ آخر تقرير أُرسل
@@ -477,6 +554,7 @@ def main():
 
     threading.Thread(target=_outcome_loop,        daemon=True).start()
     threading.Thread(target=_weekly_report_loop,  daemon=True).start()
+    threading.Thread(target=_daily_summary_loop,  daemon=True).start()
     threading.Thread(target=_premarket_loop,      daemon=True).start()
     price_monitor.start(_load_watchlist())
     start_command_listener(scan_callback=scan)
