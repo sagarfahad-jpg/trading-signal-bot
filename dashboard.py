@@ -428,13 +428,38 @@ st.divider()
 
 log  = load_log()
 total_sent, wins, losses, win_rate = outcome_stats(log)
-today_signals = [e for e in log if e.get("timestamp","").startswith(datetime.now().strftime("%Y-%m-%d"))]
 
-k1, k2, k3, k4 = st.columns(4)
+# ── إجمالي R ─────────────────────────────────────────────────────────────────
+_decided = [e for e in log if "WIN" in str(e.get("outcome","")) or "LOSS" in str(e.get("outcome",""))]
+_total_r  = 0.0
+for _e in _decided:
+    _o  = str(_e.get("outcome",""))
+    _rr = float(_e.get("rr", 1.5) or 1.5)
+    if   "WIN_T2" in _o: _total_r += _rr
+    elif "WIN_T1" in _o: _total_r += _rr * 0.5
+    elif "LOSS"   in _o: _total_r -= 1.0
+_total_r = round(_total_r, 2)
+
+# ── هذا الأسبوع ───────────────────────────────────────────────────────────────
+import datetime as _dt
+_et       = pytz.timezone(config.TIMEZONE)
+_now_et   = datetime.now(_et)
+_week_start = (_now_et - _dt.timedelta(days=_now_et.weekday())).strftime("%Y-%m-%d")
+_week_sigs  = [e for e in log if e.get("timestamp","") >= _week_start]
+
+# ── مفتوحة الآن ──────────────────────────────────────────────────────────────
+_open_now = [e for e in log if e.get("outcome") is None and e.get("sent")]
+
+k1, k2, k3, k4, k5 = st.columns(5)
 k1.metric("📤 إجمالي الإشارات", total_sent)
 k2.metric("✅ فوز", wins, delta=f"{win_rate}% معدل الفوز" if total_sent else None)
 k3.metric("❌ خسارة", losses)
-k4.metric("📅 إشارات اليوم", len(today_signals))
+k4.metric("🔵 مفتوحة الآن", len(_open_now),
+          delta=f"{len(_week_sigs)} هذا الأسبوع")
+_r_color = "normal" if _total_r >= 0 else "inverse"
+k5.metric("💹 إجمالي R",
+          f"{'+' if _total_r >= 0 else ''}{_total_r}R",
+          delta=f"متوسط {round(_total_r/len(_decided),2) if _decided else 0}R/صفقة")
 
 st.divider()
 
