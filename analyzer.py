@@ -341,7 +341,54 @@ def _get_contract(symbol: str, direction: str, price: float, is_scalp: bool = Fa
 
 # ─── SMT (Smart Money Technique) ─────────────────────────────────────────────
 
-_smt_cache: dict = {"ts": 0.0, "direction": ""}
+_smt_cache: dict  = {"ts": 0.0, "direction": ""}
+_perf_cache: dict = {"ts": 0.0, "adj": {}}
+
+
+def _get_perf_adj(entry_type: str) -> float:
+    """
+    تعديل السكور بناءً على أداء نوع الدخول التاريخي (من Supabase).
+    يُحدَّث كل 24 ساعة.
+    WR ≥ 65% → +0.8   |  50-65% → +0.3
+    40-50%   → 0.0    |  < 40%  → -1.0
+    يُطبَّق فقط لو فيه ≥ 5 إشارات محسومة.
+    """
+    import time as _t
+    now = _t.time()
+    if now - float(_perf_cache["ts"]) < 86400:
+        return float(_perf_cache["adj"].get(entry_type, 0.0))
+
+    try:
+        import db
+        signals = db.get_all_signals(limit=500)
+        stats: dict = {}
+        for s in signals:
+            et     = s.get("entry_type", "")
+            status = s.get("status", "")
+            if not et or status in ("open", "expired"):
+                continue
+            if et not in stats:
+                stats[et] = {"w": 0, "n": 0}
+            stats[et]["n"] += 1
+            if status in ("hit_t1", "hit_t2"):
+                stats[et]["w"] += 1
+
+        adj: dict = {}
+        for et, d in stats.items():
+            if d["n"] < 5:
+                continue
+            wr = d["w"] / d["n"]
+            if   wr >= 0.65: adj[et] =  0.8
+            elif wr >= 0.50: adj[et] =  0.3
+            elif wr >= 0.40: adj[et] =  0.0
+            else:            adj[et] = -1.0
+
+        _perf_cache["ts"]  = now
+        _perf_cache["adj"] = adj
+    except Exception:
+        pass
+
+    return float(_perf_cache["adj"].get(entry_type, 0.0))
 
 
 def _compute_smt(df_nas: pd.DataFrame, df_spx: pd.DataFrame) -> str:
@@ -734,6 +781,20 @@ def analyze(
         vix = vix_value if vix_value is not None else 20.0
         effective_min = min_score + (1.0 if vix > 25 else 0.0) + (1.5 if vix > 32 else 0.0)
 
+        # ── فلتر الجلسة (توقيت ET) ────────────────────────────────────────────
+        # ذروة:  10:00 ص – 2:00 م  → بدون عقوبة
+        # افتتاح: 9:35 – 10:00 ص  → +1.5 (تقلبات عالية)
+        # إغلاق: 2:00 – 3:45 م   → +0.5
+        try:
+            _et_now  = datetime.now(pytz.timezone('America/New_York'))
+            _et_mins = _et_now.hour * 60 + _et_now.minute
+            if _et_mins < 10 * 60:          # قبل 10:00 ص
+                effective_min += 1.5
+            elif _et_mins > 14 * 60:        # بعد 2:00 م
+                effective_min += 0.5
+        except Exception:
+            pass
+
         if bs >= ps and bs >= effective_min:
             direction, score = 'call', bs
         elif ps > bs and ps >= effective_min:
@@ -793,6 +854,11 @@ def analyze(
 
         # ── رفع الحد لـ RSI Divergence (+1.5) ────────────────────────────────
         if 'RSI Divergence' in entry_type and score < effective_min + 1.5:
+            return None
+
+        # ── Auto-Weight: تعديل السكور بناءً على الأداء التاريخي ──────────────
+        score += _get_perf_adj(entry_type)
+        if score < effective_min:
             return None
 
         # ── فلتر Risk/Reward ──────────────────────────────────────────────────
