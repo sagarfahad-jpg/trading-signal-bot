@@ -742,16 +742,34 @@ with tab2:
         st.info("لا توجد إشارات مسجّلة بعد.")
     else:
         df_log = pd.DataFrame(log[::-1])
-        cols_show = ["timestamp","symbol","direction","confidence","score","rr","vix","mtf_score",
-                     "entry_low","entry_high","stop","target1","target2","sent","outcome"]
+
+        # عمود الدخول = متوسط entry_low و entry_high
+        if "entry_low" in df_log.columns and "entry_high" in df_log.columns:
+            df_log["دخول"] = ((pd.to_numeric(df_log["entry_low"], errors="coerce") +
+                               pd.to_numeric(df_log["entry_high"], errors="coerce")) / 2).round(2)
+        elif "suggested_entry" in df_log.columns:
+            df_log["دخول"] = pd.to_numeric(df_log["suggested_entry"], errors="coerce").round(2)
+
+        cols_show = ["timestamp","symbol","direction","confidence","score","rr",
+                     "دخول","stop","target1","target2","outcome"]
         cols_show = [c for c in cols_show if c in df_log.columns]
         df_log = df_log[cols_show].rename(columns={
-            "timestamp":"الوقت","symbol":"الأصل","direction":"الاتجاه",
-            "confidence":"الثقة","score":"التقييم","rr":"R:R","vix":"VIX",
-            "mtf_score":"MTF","entry_low":"دخول↓","entry_high":"دخول↑",
-            "stop":"وقف","target1":"هدف1","target2":"هدف2",
-            "sent":"أُرسلت","outcome":"النتيجة",
+            "timestamp" : "الوقت",
+            "symbol"    : "الأصل",
+            "direction" : "الاتجاه",
+            "confidence": "الثقة",
+            "score"     : "التقييم",
+            "rr"        : "R:R",
+            "stop"      : "وقف",
+            "target1"   : "هدف 1",
+            "target2"   : "هدف 2",
+            "outcome"   : "النتيجة",
         })
+
+        # تحويل الأعمدة الرقمية
+        for _c in ["التقييم","R:R","دخول","وقف","هدف 1","هدف 2"]:
+            if _c in df_log.columns:
+                df_log[_c] = pd.to_numeric(df_log[_c], errors="coerce")
 
         def color_outcome(val):
             if val and "WIN"  in str(val): return "color: #00c853; font-weight:bold"
@@ -759,7 +777,16 @@ with tab2:
             return ""
 
         st.dataframe(
-            df_log.style.map(color_outcome, subset=["النتيجة"]),
+            df_log.style
+                .map(color_outcome, subset=["النتيجة"])
+                .format({
+                    "التقييم": "{:.1f}",
+                    "R:R"    : "{:.2f}",
+                    "دخول"   : "{:.2f}",
+                    "وقف"    : "{:.2f}",
+                    "هدف 1"  : "{:.2f}",
+                    "هدف 2"  : "{:.2f}",
+                }, na_rep="—"),
             width="stretch",
             height=500,
         )
