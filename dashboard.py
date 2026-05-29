@@ -579,6 +579,20 @@ with tab1:
             c5.metric("📦 عدد العقود", f"{sig.contracts}")
             c6.metric("🏦 مخاطرة",     f"${sig.contracts * sig.option_price * 100:.0f}" if sig.option_price > 0 else "—")
 
+            # ── HTF Zone Banner ───────────────────────────────────────────────
+            if sig.htf_zone_tf:
+                tf_labels = {'1h': '1H', '4h': '4H', 'daily': 'Daily'}
+                htf_label = f"{tf_labels.get(sig.htf_zone_tf, sig.htf_zone_tf)} {sig.htf_zone_type}"
+                dir_z_ar  = 'Demand 🟢' if sig.htf_direction == 'demand' else 'Supply 🔴'
+                if sig.cisd:
+                    st.success(f"🏛️ HTF Zone: **{htf_label}** ({dir_z_ar})  |  ⚡ **CISD مؤكَّد** — تحوّل هيكلي")
+                elif sig.displacement:
+                    st.success(f"🏛️ HTF Zone: **{htf_label}** ({dir_z_ar})  |  💪 **Displacement** — تدخل مؤسسي")
+                else:
+                    st.info(f"🏛️ HTF Zone: **{htf_label}** ({dir_z_ar})  |  ⏳ السعر في المنطقة — انتظار تأكيد")
+            else:
+                st.warning("⚠️ السعر ليس في منطقة HTF محددة — إشارة خارج النطاق")
+
             # ── صف ٤: Greeks + VWAP + Regime
             if sig.delta != 0 or sig.vwap > 0:
                 st.caption("📐 Greeks & Market Context")

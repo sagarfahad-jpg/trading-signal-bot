@@ -15,6 +15,14 @@ def format_message(s: SignalResult) -> str:
     regime_map  = {'bull': '📈 صاعد', 'bear': '📉 هابط', 'neutral': '↔ محايد'}
     regime_line = f"🌐 اتجاه السوق: {regime_map.get(s.regime, '—')}\n" if s.regime else ''
 
+    # ── HTF Zone ──────────────────────────────────────────────────────────────
+    htf_line = ""
+    if s.htf_zone_tf:
+        tf_ar    = {'1h': '١ ساعة', '4h': '٤ ساعات', 'daily': 'يومي'}.get(s.htf_zone_tf, s.htf_zone_tf)
+        dir_z_ar = 'طلب 🟢' if s.htf_direction == 'demand' else 'عرض 🔴'
+        confirm  = ' ⚡ CISD' if s.cisd else (' 💪 Displacement' if s.displacement else ' ⏳ في المنطقة')
+        htf_line = f"🏛️ HTF Zone: {tf_ar} {s.htf_zone_type} ({dir_z_ar}){confirm}\n"
+
     # ── VWAP ──────────────────────────────────────────────────────────────────
     vwap_line = ""
     if s.vwap > 0:
@@ -41,6 +49,7 @@ def format_message(s: SignalResult) -> str:
         f"الاتجاه: {dir_ar} {dir_emoji}  |  الثقة: {conf_ar} {conf_emoji}\n"
         f"⏰ صلاحية العقد: {expiry_type}\n"
         f"{regime_line}"
+        f"{htf_line}"
         f"\n"
         f"⚙️ خطة التنفيذ:\n"
         f"💠 نوع الدخول: {s.entry_type}\n"

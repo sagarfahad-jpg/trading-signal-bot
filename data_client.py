@@ -32,8 +32,8 @@ def _get_alpaca():
 
 _PERIOD_DAYS = {
     "1d": 1,  "2d": 2,  "3d": 3,  "5d": 5,
-    "7d": 7, "10d": 10, "15d": 15, "30d": 32,
-    "60d": 63, "90d": 93,
+    "7d": 7, "10d": 10, "14d": 14, "15d": 15,
+    "30d": 32, "60d": 63, "90d": 93,
 }
 
 # ─── Interval → Alpaca TimeFrame ──────────────────────────────────────────────
@@ -46,6 +46,7 @@ def _to_timeframe(interval: str):
         "15m": TimeFrame(15, TimeFrameUnit.Minute),
         "30m": TimeFrame(30, TimeFrameUnit.Minute),
         "1h":  TimeFrame.Hour,
+        "4h":  TimeFrame(4, TimeFrameUnit.Hour),
         "1d":  TimeFrame.Day,
     }
     return mapping.get(interval, TimeFrame(5, TimeFrameUnit.Minute))

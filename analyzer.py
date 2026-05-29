@@ -27,13 +27,19 @@ class SignalResult:
     rr: float           # Risk/Reward ratio
     vix: float          # VIX at signal time
     mtf_score: int      # عدد الأطر الزمنية المؤكِّدة (0-2)
-    option_price: float = 0.0   # سعر العقد (Premium) — bid/ask midpoint
-    delta:        float = 0.0   # Delta (0-1)
-    iv:           float = 0.0   # Implied Volatility
-    theta:        float = 0.0   # Theta (daily decay)
-    contracts:    int   = 1     # عدد العقود المقترح (Position Sizing)
-    vwap:         float = 0.0   # VWAP لحظة الإشارة
-    regime:       str   = ""    # "bull" / "bear" / "neutral"
+    option_price:  float = 0.0   # سعر العقد (Premium) — bid/ask midpoint
+    delta:         float = 0.0   # Delta (0-1)
+    iv:            float = 0.0   # Implied Volatility
+    theta:         float = 0.0   # Theta (daily decay)
+    contracts:     int   = 1     # عدد العقود المقترح (Position Sizing)
+    vwap:          float = 0.0   # VWAP لحظة الإشارة
+    regime:        str   = ""    # "bull" / "bear" / "neutral"
+    # ── HTF Analysis ──────────────────────────────────────────────────────────
+    htf_zone_tf:   str   = ""    # '1h' | '4h' | 'daily'
+    htf_zone_type: str   = ""    # 'OB' | 'FVG'
+    htf_direction: str   = ""    # 'demand' | 'supply'
+    cisd:          bool  = False # CISD مؤكَّد على 5m
+    displacement:  bool  = False # Displacement Candle على 5m
 
 
 # ─── Indicators ───────────────────────────────────────────────────────────────
@@ -469,6 +475,8 @@ def analyze(
     try:
         df5  = data_client.get_bars(symbol, '5m', '3d')
         df1d = data_client.get_bars(symbol, '1d', '60d')
+        df1h = data_client.get_bars(symbol, '1h', '14d')
+        df4h = data_client.get_bars(symbol, '4h', '30d')
 
         if df5.empty or len(df5) < 60 or df1d.empty or len(df1d) < 20:
             return None
@@ -582,6 +590,60 @@ def analyze(
         if regime == "bull":    bs += 0.5
         elif regime == "bear":  ps += 0.5
 
+        # ── HTF Zone Analysis ─────────────────────────────────────────────────
+        from htf_zones import (get_htf_analysis, price_in_zone, nearest_zone,
+                                cisd_5m, displacement_5m, fvg_confirms_zone)
+
+        htf          = get_htf_analysis(symbol, df1h, df4h, df1d)
+        _direction_p = 'call' if bs >= ps else 'put'  # الاتجاه المؤقت للبحث عن المنطقة
+
+        active_zone = price_in_zone(price, htf['zones'])
+        if active_zone is None:
+            active_zone = nearest_zone(price, htf['zones'], _direction_p)
+
+        htf_zone_tf   = ""
+        htf_zone_type = ""
+        htf_direction = ""
+        is_cisd       = False
+        is_displace   = False
+
+        if active_zone:
+            htf_zone_tf   = active_zone.timeframe
+            htf_zone_type = active_zone.zone_type.upper()
+            htf_direction = active_zone.direction
+            zone_aligns   = (
+                (_direction_p == 'call' and active_zone.direction == 'demand') or
+                (_direction_p == 'put'  and active_zone.direction == 'supply')
+            )
+
+            if zone_aligns:
+                # مكافأة الفريم: 1h=+1.0، 4h=+2.0، daily=+3.0
+                zone_bonus = active_zone.strength
+                # تأكيدات الـ 5m
+                bull_c, bear_c = cisd_5m(df5)
+                is_cisd     = (_direction_p == 'call' and bull_c) or (_direction_p == 'put' and bear_c)
+                is_displace = displacement_5m(df5, _direction_p, atr)
+                fvg_conf    = fvg_confirms_zone(df5, active_zone, _direction_p)
+
+                if   is_cisd:     confirm_bonus = 4.0   # الأقوى
+                elif is_displace: confirm_bonus = 3.0
+                elif fvg_conf:    confirm_bonus = 2.5
+                else:             confirm_bonus = 1.0   # في المنطقة، انتظار تأكيد
+
+                if _direction_p == 'call':
+                    bs += zone_bonus + confirm_bonus
+                else:
+                    ps += zone_bonus + confirm_bonus
+            else:
+                # الإشارة تعارض اتجاه المنطقة → عقوبة
+                if _direction_p == 'call': bs -= 2.0
+                else:                      ps -= 2.0
+
+        # مكافأة توافق البنية HTF
+        for tf_bias in htf.get('structure', {}).values():
+            if _direction_p == 'call' and tf_bias == 'bullish':   bs += 0.3
+            elif _direction_p == 'put' and tf_bias == 'bearish':  ps += 0.3
+
         # ── فلتر VIX ─────────────────────────────────────────────────────────
         vix = vix_value if vix_value is not None else 20.0
         effective_min = min_score + (1.0 if vix > 25 else 0.0) + (1.5 if vix > 32 else 0.0)
@@ -640,6 +702,17 @@ def analyze(
         if rr < min_rr:
             return None
 
+        # ── HTF Stop Override (أضيق = R:R أفضل) ──────────────────────────────
+        if active_zone and htf_direction == ('demand' if direction == 'call' else 'supply'):
+            if direction == 'call':
+                htf_stop = round(active_zone.low - atr * 0.15, 2)
+                if htf_stop > stop:   # استخدمه فقط إذا كان أضيق
+                    stop = htf_stop
+            else:
+                htf_stop = round(active_zone.high + atr * 0.15, 2)
+                if htf_stop < stop:
+                    stop = htf_stop
+
         is_scalp   = (atr / price) < 0.007
         expiry, strike, option_price, delta, iv, theta = _get_contract(
             symbol, direction, price, is_scalp=is_scalp)
@@ -658,6 +731,8 @@ def analyze(
             rr=round(rr, 2), vix=round(vix, 1), mtf_score=mtf_score,
             option_price=option_price, delta=delta, iv=iv, theta=theta,
             contracts=contracts, vwap=round(vwap_val, 2), regime=regime,
+            htf_zone_tf=htf_zone_tf, htf_zone_type=htf_zone_type,
+            htf_direction=htf_direction, cisd=is_cisd, displacement=is_displace,
         )
 
     except Exception as e:
