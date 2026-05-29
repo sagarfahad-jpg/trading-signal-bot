@@ -66,7 +66,7 @@ def format_message(s: SignalResult) -> str:
         f"💠 مستوى الوقف: {s.stop:.2f}\n"
         f"💠 الهدف الأول: {s.target1:.2f}\n"
         f"💠 الهدف الثاني: {s.target2:.2f}\n"
-        f"📊 R:R = {s.rr:.2f}  |  Score: {s.score:.1f}★  |  MTF: {s.mtf_score}/2\n"
+        f"📊 R:R = {s.rr:.2f}  |  Score: {s.score:.1f}★  |  MTF: {s.mtf_score}/3{' ⚠️' if s.mtf_score == 0 else ''}\n"
         f"{scalp_line}"
         f"{vwap_line}"
         f"\n"

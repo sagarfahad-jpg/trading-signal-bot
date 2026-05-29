@@ -730,12 +730,21 @@ def analyze(
 
         confidence = 'high' if score >= high_confidence_threshold else 'medium'
 
-        # ── تأكيد Multi-Timeframe ─────────────────────────────────────────────
+        # ── تأكيد Multi-Timeframe (مؤشر جودة لا بوابة رفض) ──────────────────
         tf15 = _quick_direction(symbol, '15m', '5d')
         tf1h = _quick_direction(symbol, '1h',  '30d')
-        mtf_score = sum(1 for tf in [tf15, tf1h] if tf == direction)
-        if require_mtf and mtf_score == 0:
-            return None   # لا يوجد تأكيد من أي إطار زمني أعلى
+        tf4h = _quick_direction(symbol, '4h',  '60d')
+        mtf_score = sum(1 for tf in [tf15, tf1h, tf4h] if tf == direction)
+
+        # مكافأة / عقوبة حسب عدد الفريمات المؤكِّدة
+        if   mtf_score == 3: score += 0.9   # الثلاثة يؤكدون
+        elif mtf_score == 2: score += 0.3   # اثنان يؤكدان
+        elif mtf_score == 1: score -= 0.5   # واحد فقط
+        else:                score -= 1.5   # لا أحد — عقوبة لكن لا رفض
+
+        # أعد فحص الحد الأدنى بعد تعديل السكور
+        if score < effective_min:
+            return None
 
         # ── حساب مستويات الإشارة ──────────────────────────────────────────────
         if direction == 'call':
