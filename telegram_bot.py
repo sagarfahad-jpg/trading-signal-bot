@@ -7,7 +7,8 @@ def format_message(s: SignalResult) -> str:
     dir_emoji = '🟢'    if s.direction  == 'call'   else '🔴'
     conf_ar   = 'عالية' if s.confidence == 'high'   else 'متوسطة'
     conf_emoji= '🟢'    if s.confidence == 'high'   else '🟡'
-    scalp_line = '⚡ مناسبة للمضاربة السريعة\n' if s.is_scalp else ''
+    scalp_line  = '⚡ مناسبة للمضاربة السريعة\n' if s.is_scalp else ''
+    expiry_type = '0DTE ⚡' if s.is_scalp else 'أسبوعي 📅'
 
     return (
         f"🤖 رسالة من البوت الآلي\n"
@@ -15,7 +16,7 @@ def format_message(s: SignalResult) -> str:
         f"\n"
         f"الاتجاه: {dir_ar} {dir_emoji}\n"
         f"درجة الثقة: {conf_ar} {conf_emoji}\n"
-        f"⏰ صلاحية العقد: 0DTE\n"
+        f"⏰ صلاحية العقد: {expiry_type}\n"
         f"\n"
         f"⚙️ خطة التنفيذ:\n"
         f"💠 نوع الدخول: {s.entry_type}\n"

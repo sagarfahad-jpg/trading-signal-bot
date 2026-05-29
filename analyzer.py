@@ -3,7 +3,7 @@ from typing import Optional, List, Tuple
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import data_client
 
@@ -223,28 +223,53 @@ def _quick_direction(symbol: str, interval: str, period: str) -> Optional[str]:
 
 # ─── Options contract ─────────────────────────────────────────────────────────
 
-def _get_contract(symbol: str, direction: str, price: float) -> Tuple[str, float, float]:
-    """Returns (expiry, strike, option_price).  option_price = bid/ask midpoint or lastPrice."""
-    et = pytz.timezone('America/New_York')
-    today_str = datetime.now(et).strftime('%Y-%m-%d')
+def _get_contract(symbol: str, direction: str, price: float, is_scalp: bool = False) -> Tuple[str, float, float]:
+    """
+    Returns (expiry, strike, option_price).
+    - Scalp  → 0DTE (أقرب expiry اليوم)
+    - عادي   → أقرب جمعة قادمة (أسبوع كامل تقريباً)
+    option_price = bid/ask midpoint or lastPrice
+    """
+    et        = pytz.timezone('America/New_York')
+    today     = datetime.now(et).date()
+    today_str = today.strftime('%Y-%m-%d')
+
     try:
-        ticker = yf.Ticker(symbol)
+        ticker      = yf.Ticker(symbol)
         expirations = ticker.options
         if not expirations:
-            return today_str.replace('-', ''), round(price), 0.0
+            return today_str.replace('-', ''), float(round(price)), 0.0
+
         available = [e for e in expirations if e >= today_str]
-        expiry = available[0] if available else expirations[0]
+        if not available:
+            available = list(expirations)
+
+        if is_scalp:
+            # 0DTE — أقرب expiry (غالباً اليوم)
+            expiry = available[0]
+        else:
+            # أقرب جمعة قادمة (بعد اليوم)
+            days_ahead = (4 - today.weekday()) % 7   # 4 = الجمعة
+            if days_ahead == 0:
+                days_ahead = 7                        # إذا اليوم جمعة، خذ الجمعة التالية
+            next_friday     = today + timedelta(days=days_ahead)
+            next_friday_str = next_friday.strftime('%Y-%m-%d')
+            weekly  = [e for e in available if e >= next_friday_str]
+            expiry  = weekly[0] if weekly else available[0]
+
         chain = ticker.option_chain(expiry)
-        opts = chain.calls if direction == 'call' else chain.puts
+        opts  = chain.calls if direction == 'call' else chain.puts
         if opts.empty:
-            return expiry.replace('-', ''), round(price), 0.0
-        opts = opts.copy()
-        opts['dist'] = (opts['strike'] - price).abs()
-        row    = opts.nsmallest(1, 'dist').iloc[0]
-        strike = float(row['strike'])
-        # سعر العقد: نقطة المنتصف بين bid/ask، أو lastPrice كـ fallback
-        bid  = float(row.get('bid', 0) or 0)
-        ask  = float(row.get('ask', 0) or 0)
+            return expiry.replace('-', ''), float(round(price)), 0.0
+
+        opts          = opts.copy()
+        opts['dist']  = (opts['strike'] - price).abs()
+        row           = opts.nsmallest(1, 'dist').iloc[0]
+        strike        = float(row['strike'])
+
+        # سعر العقد: منتصف bid/ask أو lastPrice كـ fallback
+        bid  = float(row.get('bid',       0) or 0)
+        ask  = float(row.get('ask',       0) or 0)
         last = float(row.get('lastPrice', 0) or 0)
         if bid > 0 and ask > 0:
             option_price = round((bid + ask) / 2, 2)
@@ -252,7 +277,9 @@ def _get_contract(symbol: str, direction: str, price: float) -> Tuple[str, float
             option_price = round(last, 2)
         else:
             option_price = 0.0
+
         return expiry.replace('-', ''), strike, option_price
+
     except Exception:
         return today_str.replace('-', ''), float(round(price)), 0.0
 
@@ -565,7 +592,7 @@ def analyze(
             return None
 
         is_scalp   = (atr / price) < 0.007
-        expiry, strike, option_price = _get_contract(symbol, direction, price)
+        expiry, strike, option_price = _get_contract(symbol, direction, price, is_scalp=is_scalp)
 
         return SignalResult(
             symbol=symbol, direction=direction, confidence=confidence,
