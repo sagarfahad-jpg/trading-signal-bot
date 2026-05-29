@@ -17,6 +17,7 @@ from weekly_report import send_weekly_report
 from telegram_commands import start_command_listener
 import db
 import outcome_tracker
+import price_monitor
 
 LOG_FILE       = os.path.join(os.path.dirname(__file__), "signals_log.json")
 WATCHLIST_FILE = os.path.join(os.path.dirname(__file__), "watchlist.json")
@@ -90,16 +91,21 @@ def log_signal(signal: SignalResult, sent_ok: bool):
         "strike"     : signal.strike,
         "entry_type" : signal.entry_type,
         "option_price": signal.option_price,
+        "delta"      : signal.delta,
         "contracts"  : signal.contracts,
         "regime"         : signal.regime,
         "smt_divergence" : signal.smt_divergence,
         "smt_direction"  : signal.smt_direction,
         "sent"           : sent_ok,
         "outcome"    : None,
-        "notified"   : False,   # هل أُرسل إشعار النتيجة النهائية؟
-        "be_notified": False,   # هل أُرسل تنبيه تحريك الوقف (break-even)؟
+        "notified"   : False,
+        "be_notified": False,
     })
     _write_log(log)
+
+    # ── تتبع لحظي ─────────────────────────────────────────────────────────────
+    if sent_ok:
+        price_monitor.add_signal(signal.symbol, log[-1])
 
 
 # ─── Outcome notifications ────────────────────────────────────────────────────
@@ -472,6 +478,7 @@ def main():
     threading.Thread(target=_outcome_loop,        daemon=True).start()
     threading.Thread(target=_weekly_report_loop,  daemon=True).start()
     threading.Thread(target=_premarket_loop,      daemon=True).start()
+    price_monitor.start(_load_watchlist())
     start_command_listener(scan_callback=scan)
 
     scan()
