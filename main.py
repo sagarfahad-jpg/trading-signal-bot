@@ -4,6 +4,7 @@ Trading Signal Bot v3  — VIX / Earnings / MTF / R:R / Outcome Notifications / 
 """
 
 import time, json, os, threading, subprocess, platform
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import pytz, yfinance as yf
 
@@ -285,6 +286,30 @@ def cooldown_ok(symbol: str) -> bool:
 
 # ─── Scan ──────────────────────────────────────────────────────────────────────
 
+def _correlated_group(sym: str):
+    for i, grp in enumerate(config.CORRELATED_GROUPS):
+        if sym in grp:
+            return i
+    return None
+
+
+def _analyze_one(symbol: str, vix: float, sym_min: float):
+    """تحليل أصل واحد — يُستدعى بشكل موازٍ."""
+    if not cooldown_ok(symbol):
+        return symbol, None
+    try:
+        return symbol, analyze(
+            symbol,
+            min_score=sym_min,
+            high_confidence_threshold=config.HIGH_CONFIDENCE_THRESHOLD,
+            min_rr=1.5,
+            vix_value=vix,
+        )
+    except Exception as e:
+        print(f"  [scan] {symbol}: {e}")
+        return symbol, None
+
+
 def scan():
     if not is_market_open():
         print(f"[{datetime.now().strftime('%H:%M')}] السوق مغلق.")
@@ -295,51 +320,38 @@ def scan():
     thresholds = _load_thresholds()
     ts         = datetime.now().strftime('%H:%M:%S')
 
-    print(f"\n[{ts}] فحص {len(watchlist)} أصل  |  VIX: {vix:.1f}")
+    print(f"\n[{ts}] فحص {len(watchlist)} أصل بالتوازي  |  VIX: {vix:.1f}")
     if vix > 32:
         print("  ⚠️  VIX مرتفع — الحد الأدنى رُفع تلقائياً")
+
+    # ── تحليل موازٍ ───────────────────────────────────────────────────────────
+    signals: list = []
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        futures = {
+            ex.submit(_analyze_one, sym, vix, thresholds.get(sym, config.MIN_SCORE)): sym
+            for sym in watchlist
+        }
+        for future in as_completed(futures):
+            symbol, signal = future.result()
+            if signal:
+                d = 'CALL' if signal.direction == 'call' else 'PUT'
+                print(f"  → {symbol} {d} | تقييم: {signal.score:.1f} | R:R {signal.rr:.1f} | MTF: {signal.mtf_score}/3")
+                signals.append((symbol, signal))
+            else:
+                print(f"  → {futures[future]} —")
+
+    # ── إرسال (مرتّب حسب السكور + فلتر الارتباط) ────────────────────────────
+    signals.sort(key=lambda x: x[1].score, reverse=True)
+    sent_groups: set = set()
     sent = 0
 
-    # فلتر الارتباط: يتبع أي مجموعة أُرسلت منها إشارة في هذا المسح
-    sent_groups: set = set()   # مجموعات أُرسل لها إشارة بالفعل
-
-    def _correlated_group(sym: str):
-        for i, grp in enumerate(config.CORRELATED_GROUPS):
-            if sym in grp:
-                return i
-        return None
-
-    for symbol in watchlist:
-        if not cooldown_ok(symbol):
-            continue
-
-        # تخطّى إذا أُرسلت إشارة لأصل مرتبط في نفس المسح
+    for symbol, signal in signals:
         grp_id = _correlated_group(symbol)
         if grp_id is not None and grp_id in sent_groups:
-            print(f"  → {symbol} ⛔ تخطّى (ارتباط مع مجموعة {grp_id})")
+            print(f"  → {symbol} ⛔ تخطّى (ارتباط)")
             continue
-
-        sym_min = thresholds.get(symbol, config.MIN_SCORE)
-        print(f"  → {symbol} (حد: {sym_min})", end=" ", flush=True)
-
-        signal = analyze(
-            symbol,
-            min_score=sym_min,
-            high_confidence_threshold=config.HIGH_CONFIDENCE_THRESHOLD,
-            min_rr=1.5,
-            vix_value=vix,
-        )
-
-        if signal is None:
-            print("—")
-            time.sleep(1.5)
-            continue
-
-        d = 'CALL' if signal.direction == 'call' else 'PUT'
-        print(f"{d} | تقييم: {signal.score:.1f} | R:R {signal.rr:.1f} | MTF: {signal.mtf_score}/2")
 
         msg = format_message(signal)
-        # أرسل مع رسم بياني
         try:
             df_chart = _dc.get_bars(symbol, '5m', '2d')
             chart    = generate_signal_chart(df_chart, signal)
@@ -351,16 +363,13 @@ def scan():
         if ok:
             last_signal[symbol] = datetime.now()
             sent += 1
-            print(f"     ✓ أُرسلت")
+            print(f"     ✓ أُرسلت {symbol}")
             if signal.confidence == "high":
                 play_alert()
-            # سجّل المجموعة المرتبطة حتى لا يُرسل أصل آخر منها
             if grp_id is not None:
                 sent_groups.add(grp_id)
         else:
-            print(f"     ✗ فشل")
-
-        time.sleep(2)
+            print(f"     ✗ فشل {symbol}")
 
     print(f"اكتمل — {sent} إشارة/إشارات.\n")
 

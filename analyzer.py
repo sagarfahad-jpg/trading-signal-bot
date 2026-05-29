@@ -221,26 +221,37 @@ def get_vix() -> float:
         return 20.0
 
 
+_earnings_cache: dict = {}
+
 def has_earnings_soon(symbol: str, days: int = 2) -> bool:
-    """True if the symbol has earnings within the next N days."""
+    """True if the symbol has earnings within the next N days. Cached 6 hours."""
+    import time as _t
+    key = (symbol, days)
+    entry = _earnings_cache.get(key)
+    if entry and _t.time() - entry[1] < 21600:
+        return entry[0]
+
+    result = False
     try:
         ticker = yf.Ticker(symbol)
         cal = ticker.calendar
-        if cal is None:
-            return False
-        today = datetime.now().date()
-        for col in (cal.columns if hasattr(cal, 'columns') else []):
-            val = cal[col].get('Earnings Date') if hasattr(cal[col], 'get') else None
-            if val is not None:
-                try:
-                    delta = (pd.Timestamp(val).date() - today).days
-                    if -1 <= delta <= days:
-                        return True
-                except Exception:
-                    pass
-        return False
+        if cal is not None:
+            today = datetime.now().date()
+            for col in (cal.columns if hasattr(cal, 'columns') else []):
+                val = cal[col].get('Earnings Date') if hasattr(cal[col], 'get') else None
+                if val is not None:
+                    try:
+                        delta = (pd.Timestamp(val).date() - today).days
+                        if -1 <= delta <= days:
+                            result = True
+                            break
+                    except Exception:
+                        pass
     except Exception:
-        return False
+        pass
+
+    _earnings_cache[key] = (result, _t.time())
+    return result
 
 
 def _quick_direction(symbol: str, interval: str, period: str) -> Optional[str]:
@@ -264,7 +275,7 @@ def _quick_direction(symbol: str, interval: str, period: str) -> Optional[str]:
 
 # ─── Options contract ─────────────────────────────────────────────────────────
 
-def _get_contract(symbol: str, direction: str, price: float, is_scalp: bool = False) -> Tuple[str, float, float, float, float, float]:
+def _get_contract(symbol: str, direction: str, price: float, is_scalp: bool = False, score: float = 0.0) -> Tuple[str, float, float, float, float, float]:
     """
     Returns (expiry, strike, option_price, delta, iv, theta).
     - Scalp  → 0DTE
@@ -285,15 +296,17 @@ def _get_contract(symbol: str, direction: str, price: float, is_scalp: bool = Fa
             available = list(expirations)
 
         if is_scalp:
-            expiry = available[0]
+            expiry = available[0]   # 0DTE ⚡
         else:
-            days_ahead      = (4 - today.weekday()) % 7
-            if days_ahead == 0:
-                days_ahead  = 7
-            next_friday     = today + timedelta(days=days_ahead)
-            next_friday_str = next_friday.strftime('%Y-%m-%d')
-            weekly  = [e for e in available if e >= next_friday_str]
-            expiry  = weekly[0] if weekly else available[0]
+            if score >= 7.5:
+                min_days = 30   # Monthly
+            elif score >= 7.0:
+                min_days = 14   # Biweekly
+            else:
+                min_days = 7    # Weekly
+            target_str = (today + timedelta(days=min_days)).strftime('%Y-%m-%d')
+            candidates = [e for e in available if e >= target_str]
+            expiry     = candidates[0] if candidates else available[0]
 
         chain = ticker.option_chain(expiry)
         opts  = chain.calls if direction == 'call' else chain.puts
@@ -809,7 +822,7 @@ def analyze(
 
         is_scalp   = (atr / price) < 0.007
         expiry, strike, option_price, delta, iv, theta = _get_contract(
-            symbol, direction, price, is_scalp=is_scalp)
+            symbol, direction, price, is_scalp=is_scalp, score=score)
 
         # ── Position Sizing ───────────────────────────────────────────────────
         import config as _cfg

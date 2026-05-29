@@ -7,11 +7,15 @@ yfinance:        احتياطي فقط (VIX + Options chain)
 """
 
 from __future__ import annotations
-import pytz, pandas as pd
+import pytz, pandas as pd, time as _time
 from datetime import datetime, timedelta
 from typing import Optional
 
 import config
+
+# ─── Cache للبيانات بطيئة التغيير ────────────────────────────────────────────
+_bars_cache: dict = {}
+_CACHE_TTL = {"1h": 600, "4h": 900, "1d": 1800}  # ثواني
 
 # ─── Alpaca client (singleton) ────────────────────────────────────────────────
 
@@ -60,12 +64,24 @@ def get_bars(symbol: str, interval: str = "5m", period: str = "2d") -> pd.DataFr
     إذا فشل → يرجع لـ yfinance تلقائياً.
     الأعمدة تطابق yfinance: Open High Low Close Volume
     """
+    ttl = _CACHE_TTL.get(interval, 0)
+    if ttl:
+        key = (symbol, interval, period)
+        entry = _bars_cache.get(key)
+        if entry and _time.time() - entry[1] < ttl:
+            return entry[0].copy()
+
     if config.ALPACA_API_KEY and config.ALPACA_SECRET_KEY:
         df = _fetch_alpaca(symbol, interval, period)
         if df is not None and not df.empty:
+            if ttl:
+                _bars_cache[(symbol, interval, period)] = (df, _time.time())
             return df
 
-    return _fetch_yfinance(symbol, interval, period)
+    df = _fetch_yfinance(symbol, interval, period)
+    if ttl and not df.empty:
+        _bars_cache[(symbol, interval, period)] = (df, _time.time())
+    return df
 
 
 def _fetch_alpaca(symbol: str, interval: str, period: str) -> Optional[pd.DataFrame]:
