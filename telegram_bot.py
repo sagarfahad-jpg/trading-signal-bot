@@ -28,7 +28,8 @@ def format_message(s: SignalResult) -> str:
         f"\n"
         f"📋 العقد المقترح:\n"
         f"Expiry: {s.expiry} | Strike: {s.strike:.1f} | {dir_ar} {dir_emoji}\n"
-        f"\n"
+        + (f"💰 سعر العقد (Premium): ~${s.option_price:.2f}\n" if s.option_price > 0 else "")
+        + f"\n"
         f"للمراقبة فقط — ليست توصية شراء"
     )
 

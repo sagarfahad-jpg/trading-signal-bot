@@ -27,6 +27,7 @@ class SignalResult:
     rr: float           # Risk/Reward ratio
     vix: float          # VIX at signal time
     mtf_score: int      # عدد الأطر الزمنية المؤكِّدة (0-2)
+    option_price: float = 0.0  # سعر العقد (Premium) — bid/ask midpoint
 
 
 # ─── Indicators ───────────────────────────────────────────────────────────────
@@ -222,26 +223,38 @@ def _quick_direction(symbol: str, interval: str, period: str) -> Optional[str]:
 
 # ─── Options contract ─────────────────────────────────────────────────────────
 
-def _get_contract(symbol: str, direction: str, price: float) -> Tuple[str, float]:
+def _get_contract(symbol: str, direction: str, price: float) -> Tuple[str, float, float]:
+    """Returns (expiry, strike, option_price).  option_price = bid/ask midpoint or lastPrice."""
     et = pytz.timezone('America/New_York')
     today_str = datetime.now(et).strftime('%Y-%m-%d')
     try:
         ticker = yf.Ticker(symbol)
         expirations = ticker.options
         if not expirations:
-            return today_str.replace('-', ''), round(price)
+            return today_str.replace('-', ''), round(price), 0.0
         available = [e for e in expirations if e >= today_str]
         expiry = available[0] if available else expirations[0]
         chain = ticker.option_chain(expiry)
         opts = chain.calls if direction == 'call' else chain.puts
         if opts.empty:
-            return expiry.replace('-', ''), round(price)
+            return expiry.replace('-', ''), round(price), 0.0
         opts = opts.copy()
         opts['dist'] = (opts['strike'] - price).abs()
-        strike = float(opts.nsmallest(1, 'dist')['strike'].iloc[0])
-        return expiry.replace('-', ''), strike
+        row    = opts.nsmallest(1, 'dist').iloc[0]
+        strike = float(row['strike'])
+        # سعر العقد: نقطة المنتصف بين bid/ask، أو lastPrice كـ fallback
+        bid  = float(row.get('bid', 0) or 0)
+        ask  = float(row.get('ask', 0) or 0)
+        last = float(row.get('lastPrice', 0) or 0)
+        if bid > 0 and ask > 0:
+            option_price = round((bid + ask) / 2, 2)
+        elif last > 0:
+            option_price = round(last, 2)
+        else:
+            option_price = 0.0
+        return expiry.replace('-', ''), strike, option_price
     except Exception:
-        return today_str.replace('-', ''), float(round(price))
+        return today_str.replace('-', ''), float(round(price)), 0.0
 
 
 # ─── Quick scan (للـ Dashboard فقط — بدون options chain أو MTF) ───────────────
@@ -552,7 +565,7 @@ def analyze(
             return None
 
         is_scalp   = (atr / price) < 0.007
-        expiry, strike = _get_contract(symbol, direction, price)
+        expiry, strike, option_price = _get_contract(symbol, direction, price)
 
         return SignalResult(
             symbol=symbol, direction=direction, confidence=confidence,
@@ -561,6 +574,7 @@ def analyze(
             entry_type=entry_type, current_price=price,
             is_scalp=is_scalp, expiry=expiry, strike=strike,
             rr=round(rr, 2), vix=round(vix, 1), mtf_score=mtf_score,
+            option_price=option_price,
         )
 
     except Exception as e:
