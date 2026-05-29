@@ -14,6 +14,8 @@ from chart_generator import generate_signal_chart
 import data_client as _dc
 from weekly_report import send_weekly_report
 from telegram_commands import start_command_listener
+import db
+import outcome_tracker
 
 LOG_FILE       = os.path.join(os.path.dirname(__file__), "signals_log.json")
 WATCHLIST_FILE = os.path.join(os.path.dirname(__file__), "watchlist.json")
@@ -62,6 +64,10 @@ def _write_log(data: list):
 
 
 def log_signal(signal: SignalResult, sent_ok: bool):
+    # ── حفظ في Supabase (مشترك مع Dashboard) ─────────────────────────────────
+    if sent_ok:
+        db.save_signal(signal)
+
     log = _load_log()
     log.append({
         "id"         : len(log) + 1,
@@ -216,6 +222,7 @@ def _outcome_loop():
         time.sleep(30 * 60)
         try:
             _check_outcomes()
+            outcome_tracker.check_outcomes()   # تحديث Supabase أيضاً
         except Exception:
             pass
 

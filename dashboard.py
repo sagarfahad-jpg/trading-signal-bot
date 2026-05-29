@@ -18,6 +18,7 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 import config
 from analyzer import analyze, quick_scan, get_vix, _rsi, _atr, _find_fvg, _find_order_blocks
+import db
 
 LOG_FILE = os.path.join(os.path.dirname(__file__), "signals_log.json")
 
@@ -371,7 +372,7 @@ st.divider()
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
 
-tab1, tab2, tab3, tab4 = st.tabs(["📊 مسح الأصول", "📋 سجل الإشارات", "📈 الرسم البياني", "🧪 Backtest"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 مسح الأصول", "📋 سجل الإشارات", "📈 الرسم البياني", "🧪 Backtest", "🏆 أداء الإشارات"])
 
 
 # ── Tab 1: Asset Scanner ───────────────────────────────────────────────────────
@@ -971,3 +972,305 @@ with tab4:
             st.plotly_chart(fig_bt, width="stretch")
     else:
         st.info("اختر الأصول واضغط **تشغيل الـ Backtest**")
+
+
+# ── Tab 5: Signal Performance (Supabase) ──────────────────────────────────────
+with tab5:
+    st.subheader("🏆 أداء الإشارات الحقيقية")
+    st.caption("نتائج الإشارات المرسلة — يتحدث تلقائياً بعد كل صفقة")
+
+    if not db.is_configured():
+        st.warning(
+            "⚠️ **Supabase غير مفعّل** — أضف `SUPABASE_URL` و `SUPABASE_KEY` في ملف `.env` "
+            "لتفعيل تتبع النتائج الحقيقية."
+        )
+        st.stop()
+
+    @st.cache_data(ttl=120)
+    def _load_db_signals():
+        return db.get_all_signals(limit=500)
+
+    with st.spinner("جاري جلب البيانات ..."):
+        raw = _load_db_signals()
+
+    if not raw:
+        st.info("📭 لا توجد إشارات مسجّلة في قاعدة البيانات بعد.")
+    else:
+        df_db = pd.DataFrame(raw)
+        # تحويل الأنواع
+        for col in ["score","rr","entry_price","stop_price","target1","target2",
+                    "option_price","r_multiple"]:
+            if col in df_db.columns:
+                df_db[col] = pd.to_numeric(df_db[col], errors="coerce")
+
+        # ── فئات النتائج ─────────────────────────────────────────────────────
+        decided = df_db[df_db["status"].isin(["hit_t1","hit_t2","stopped"])].copy()
+        open_cnt    = int((df_db["status"] == "open").sum())
+        wins_t2     = int((df_db["status"] == "hit_t2").sum())
+        wins_t1     = int((df_db["status"] == "hit_t1").sum())
+        losses      = int((df_db["status"] == "stopped").sum())
+        total_dec   = wins_t2 + wins_t1 + losses
+        win_rate_db = round((wins_t2 + wins_t1) / total_dec * 100) if total_dec > 0 else 0
+
+        # متوسط R
+        avg_r  = round(float(decided["r_multiple"].mean()), 2) if not decided.empty else 0.0
+        total_r = round(float(decided["r_multiple"].sum()),  2) if not decided.empty else 0.0
+
+        # ── KPIs ─────────────────────────────────────────────────────────────
+        p1, p2, p3, p4, p5 = st.columns(5)
+        p1.metric("📤 إجمالي الإشارات", len(df_db))
+        p2.metric("🏆 Win Rate",  f"{win_rate_db}%",
+                  delta=f"{wins_t1+wins_t2} فوز")
+        p3.metric("❌ خسارة", losses)
+        p4.metric("📂 مفتوحة", open_cnt)
+        clr = "#00c853" if total_r >= 0 else "#ff1744"
+        p5.metric("💹 إجمالي R",
+                  f"{'+' if total_r >= 0 else ''}{total_r}R",
+                  delta=f"متوسط {avg_r}R/صفقة")
+
+        st.divider()
+
+        # ── منحنى الأرباح التراكمية ───────────────────────────────────────────
+        if not decided.empty:
+            st.subheader("📈 منحنى الأرباح التراكمية")
+            df_eq = decided.sort_values("outcome_time").copy()
+            df_eq["cum_R"] = df_eq["r_multiple"].cumsum()
+            total_clr = "#00c853" if float(df_eq["cum_R"].iloc[-1]) >= 0 else "#ff1744"
+
+            fig_eq = go.Figure()
+            fig_eq.add_trace(go.Scatter(
+                x=list(range(1, len(df_eq) + 1)),
+                y=df_eq["cum_R"].tolist(),
+                mode="lines+markers",
+                line=dict(color=total_clr, width=2.5),
+                fill="tozeroy",
+                fillcolor=f"{'rgba(0,200,83,0.10)' if total_clr=='#00c853' else 'rgba(255,23,68,0.10)'}",
+                text=[
+                    f"{r['symbol']} {r['direction'].upper()} → "
+                    f"{'✅✅ T2' if r['status']=='hit_t2' else ('✅ T1' if r['status']=='hit_t1' else '❌ Stop')}"
+                    f"  ({'+' if r['r_multiple']>=0 else ''}{r['r_multiple']:.2f}R)"
+                    for _, r in df_eq.iterrows()
+                ],
+                hoverinfo="text+y",
+            ))
+            fig_eq.add_hline(y=0, line_dash="dash", line_color="#555", opacity=0.8)
+            fig_eq.update_layout(
+                title=dict(
+                    text=f"الأداء التراكمي: <b style='color:{total_clr};'>"
+                         f"{'+' if total_r>=0 else ''}{total_r}R</b>"
+                         f"  ({total_dec} إشارة محسومة)",
+                    font=dict(color="white", size=14),
+                ),
+                paper_bgcolor="#0f0f1a", plot_bgcolor="#0f0f1a",
+                font_color="white", height=280,
+                xaxis=dict(gridcolor="#1e1e2e",
+                           title=dict(text="رقم الإشارة", font=dict(color="#aaa"))),
+                yaxis=dict(gridcolor="#1e1e2e",
+                           title=dict(text="R Multiples", font=dict(color="#aaa"))),
+                margin=dict(l=10, r=10, t=50, b=10),
+                showlegend=False,
+            )
+            st.plotly_chart(fig_eq, use_container_width=True)
+            st.divider()
+
+        # ── Breakdown Charts ──────────────────────────────────────────────────
+        if not decided.empty:
+            st.subheader("🔍 تحليل جودة الإشارات")
+            ba, bb = st.columns(2)
+
+            # ── Win Rate by Score Range ────────────────────────────────────────
+            with ba:
+                st.caption("🎯 Win Rate حسب التقييم")
+                bins   = [0, 6, 7.5, 9, 15]
+                labels = ["< 6", "6 – 7.5", "7.5 – 9", "> 9"]
+                decided["score_bin"] = pd.cut(
+                    decided["score"], bins=bins, labels=labels, right=False
+                )
+                sc_grp = decided.groupby("score_bin", observed=True).agg(
+                    total=("status", "count"),
+                    wins =("status", lambda x: (x.isin(["hit_t1","hit_t2"])).sum()),
+                ).reset_index()
+                sc_grp["wr"] = (sc_grp["wins"] / sc_grp["total"] * 100).round(1)
+
+                fig_sc = go.Figure(go.Bar(
+                    x=sc_grp["score_bin"].astype(str),
+                    y=sc_grp["wr"],
+                    text=[f"{v:.0f}%<br>({t} إشارة)" for v, t in
+                          zip(sc_grp["wr"], sc_grp["total"])],
+                    textposition="outside",
+                    marker_color=[
+                        "#00c853" if v >= 60 else ("#ffd740" if v >= 45 else "#ff5252")
+                        for v in sc_grp["wr"]
+                    ],
+                ))
+                fig_sc.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="white", height=260, showlegend=False,
+                    yaxis=dict(range=[0, 105], gridcolor="#1e1e2e"),
+                    xaxis=dict(gridcolor="#1e1e2e"),
+                    margin=dict(l=10, r=10, t=10, b=10),
+                )
+                st.plotly_chart(fig_sc, use_container_width=True)
+
+            # ── Win Rate by HTF Zone ───────────────────────────────────────────
+            with bb:
+                st.caption("🏛️ Win Rate حسب HTF Zone")
+                def _htf_label(row):
+                    if not row.get("htf_zone_tf"):
+                        return "بلا منطقة"
+                    if row.get("cisd"):
+                        return "HTF + CISD"
+                    if row.get("displacement"):
+                        return "HTF + Displacement"
+                    return "HTF فقط"
+
+                decided["htf_cat"] = decided.apply(_htf_label, axis=1)
+                htf_grp = decided.groupby("htf_cat").agg(
+                    total=("status", "count"),
+                    wins =("status", lambda x: (x.isin(["hit_t1","hit_t2"])).sum()),
+                ).reset_index()
+                htf_grp["wr"] = (htf_grp["wins"] / htf_grp["total"] * 100).round(1)
+                htf_order = ["بلا منطقة", "HTF فقط", "HTF + Displacement", "HTF + CISD"]
+                htf_grp["_ord"] = htf_grp["htf_cat"].map(
+                    {v: i for i, v in enumerate(htf_order)})
+                htf_grp = htf_grp.sort_values("_ord")
+
+                fig_htf = go.Figure(go.Bar(
+                    x=htf_grp["htf_cat"],
+                    y=htf_grp["wr"],
+                    text=[f"{v:.0f}%<br>({t})" for v, t in
+                          zip(htf_grp["wr"], htf_grp["total"])],
+                    textposition="outside",
+                    marker_color=[
+                        "#00c853" if v >= 60 else ("#ffd740" if v >= 45 else "#ff5252")
+                        for v in htf_grp["wr"]
+                    ],
+                ))
+                fig_htf.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="white", height=260, showlegend=False,
+                    yaxis=dict(range=[0, 105], gridcolor="#1e1e2e"),
+                    xaxis=dict(gridcolor="#1e1e2e"),
+                    margin=dict(l=10, r=10, t=10, b=10),
+                )
+                st.plotly_chart(fig_htf, use_container_width=True)
+
+            # ── Win Rate by Regime + Direction ────────────────────────────────
+            bc, bd = st.columns(2)
+
+            with bc:
+                st.caption("🌐 Win Rate حسب Regime")
+                reg_grp = decided.groupby("regime").agg(
+                    total=("status", "count"),
+                    wins =("status", lambda x: (x.isin(["hit_t1","hit_t2"])).sum()),
+                ).reset_index()
+                reg_grp["wr"]    = (reg_grp["wins"] / reg_grp["total"] * 100).round(1)
+                reg_grp["label"] = reg_grp["regime"].map(
+                    {"bull": "📈 Bull", "bear": "📉 Bear", "neutral": "↔ Neutral"})
+
+                fig_reg = go.Figure(go.Bar(
+                    x=reg_grp["label"].fillna(reg_grp["regime"]),
+                    y=reg_grp["wr"],
+                    text=[f"{v:.0f}%<br>({t})" for v, t in
+                          zip(reg_grp["wr"], reg_grp["total"])],
+                    textposition="outside",
+                    marker_color=[
+                        "#00c853" if v >= 60 else ("#ffd740" if v >= 45 else "#ff5252")
+                        for v in reg_grp["wr"]
+                    ],
+                ))
+                fig_reg.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="white", height=240, showlegend=False,
+                    yaxis=dict(range=[0, 105], gridcolor="#1e1e2e"),
+                    xaxis=dict(gridcolor="#1e1e2e"),
+                    margin=dict(l=10, r=10, t=10, b=10),
+                )
+                st.plotly_chart(fig_reg, use_container_width=True)
+
+            with bd:
+                st.caption("🔀 Win Rate حسب الاتجاه")
+                dir_grp = decided.groupby("direction").agg(
+                    total=("status", "count"),
+                    wins =("status", lambda x: (x.isin(["hit_t1","hit_t2"])).sum()),
+                ).reset_index()
+                dir_grp["wr"]    = (dir_grp["wins"] / dir_grp["total"] * 100).round(1)
+                dir_grp["label"] = dir_grp["direction"].map(
+                    {"call": "CALL 🟢", "put": "PUT 🔴"})
+                dir_colors = [
+                    "#00e676" if d == "call" else "#ff5252"
+                    for d in dir_grp["direction"]
+                ]
+
+                fig_dir = go.Figure(go.Bar(
+                    x=dir_grp["label"],
+                    y=dir_grp["wr"],
+                    text=[f"{v:.0f}%<br>({t})" for v, t in
+                          zip(dir_grp["wr"], dir_grp["total"])],
+                    textposition="outside",
+                    marker_color=dir_colors,
+                ))
+                fig_dir.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="white", height=240, showlegend=False,
+                    yaxis=dict(range=[0, 105], gridcolor="#1e1e2e"),
+                    xaxis=dict(gridcolor="#1e1e2e"),
+                    margin=dict(l=10, r=10, t=10, b=10),
+                )
+                st.plotly_chart(fig_dir, use_container_width=True)
+
+            st.divider()
+
+        # ── جدول الإشارات الأخيرة ──────────────────────────────────────────────
+        st.subheader("📋 آخر الإشارات")
+
+        _status_ar = {
+            "open":    "🔵 مفتوحة",
+            "hit_t1":  "✅ T1",
+            "hit_t2":  "✅✅ T2",
+            "stopped": "❌ Stop",
+            "expired": "⏰ منتهية",
+        }
+        df_show = df_db.copy()
+        df_show["النتيجة"]   = df_show["status"].map(_status_ar).fillna(df_show["status"])
+        df_show["الاتجاه"]   = df_show["direction"].map({"call":"🟢 CALL","put":"🔴 PUT"})
+        df_show["R مُحقَّق"] = df_show["r_multiple"].apply(
+            lambda x: f"{'+' if x>=0 else ''}{x:.2f}R" if pd.notna(x) and x != 0 else "—"
+        )
+        df_show["الوقت"] = pd.to_datetime(df_show["created_at"]).dt.strftime("%m/%d %H:%M")
+
+        cols_tbl = ["الوقت","symbol","الاتجاه","score","rr",
+                    "entry_price","htf_zone_tf","النتيجة","R مُحقَّق"]
+        cols_tbl = [c for c in cols_tbl if c in df_show.columns or c in [
+            "الوقت","الاتجاه","النتيجة","R مُحقَّق"]]
+
+        df_tbl = df_show[["الوقت","symbol","الاتجاه","score","rr",
+                           "entry_price","htf_zone_tf","النتيجة","R مُحقَّق"]].rename(columns={
+            "symbol":       "الأصل",
+            "score":        "التقييم",
+            "rr":           "R:R",
+            "entry_price":  "سعر الدخول",
+            "htf_zone_tf":  "HTF Zone",
+        })
+
+        def _color_result(val):
+            if "T2"   in str(val): return "color:#00c853;font-weight:bold"
+            if "T1"   in str(val): return "color:#64dd17;font-weight:bold"
+            if "Stop" in str(val): return "color:#ff1744;font-weight:bold"
+            if "مفتوحة" in str(val): return "color:#40c4ff"
+            return "color:#888"
+
+        def _color_r(val):
+            if str(val).startswith("+"): return "color:#00c853;font-weight:bold"
+            if str(val).startswith("-"): return "color:#ff1744;font-weight:bold"
+            return ""
+
+        st.dataframe(
+            df_tbl.style
+                .map(_color_result, subset=["النتيجة"])
+                .map(_color_r,      subset=["R مُحقَّق"])
+                .format({"التقييم": "{:.1f}", "R:R": "{:.2f}",
+                         "سعر الدخول": "{:.2f}"}, na_rep="—"),
+            width="stretch",
+            height=450,
+        )

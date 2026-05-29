@@ -11,6 +11,11 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 ALPACA_API_KEY    = os.getenv("ALPACA_API_KEY", "")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
 
+# Supabase — قاعدة بيانات مشتركة لتتبع الإشارات ونتائجها
+# سجّل على: https://supabase.com (مجاني)
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+
 # الأصول المراقبة
 WATCHLIST = [
     "QQQ", "SPY", "NVDA", "AAPL", "TSLA",
