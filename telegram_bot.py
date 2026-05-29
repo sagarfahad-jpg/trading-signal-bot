@@ -23,6 +23,14 @@ def format_message(s: SignalResult) -> str:
         confirm  = ' ⚡ CISD' if s.cisd else (' 💪 Displacement' if s.displacement else ' ⏳ في المنطقة')
         htf_line = f"🏛️ HTF Zone: {tf_ar} {s.htf_zone_type} ({dir_z_ar}){confirm}\n"
 
+        # تحذير تعارض HTF مع الاتجاه
+        htf_conflicts = (
+            (s.direction == 'call' and s.htf_direction == 'supply') or
+            (s.direction == 'put'  and s.htf_direction == 'demand')
+        )
+        if htf_conflicts:
+            htf_line += f"⚠️ تحذير: HTF يعارض الاتجاه — تداول بحذر\n"
+
     # ── SMT ───────────────────────────────────────────────────────────────────
     smt_line = ""
     if s.smt_divergence:
@@ -36,9 +44,9 @@ def format_message(s: SignalResult) -> str:
         pos = "فوق" if s.current_price > s.vwap else "تحت"
         vwap_line = f"📍 VWAP: {s.vwap:.2f} (السعر {pos} الـ VWAP)\n"
 
-    # ── Greeks ────────────────────────────────────────────────────────────────
+    # ── Greeks (يُخفى لو Delta = 0 — بيانات ناقصة) ──────────────────────────
     greeks_line = ""
-    if s.delta != 0 or s.iv != 0:
+    if abs(s.delta) > 0.01 and s.iv > 0:
         greeks_line = (
             f"📐 Greeks: Δ {s.delta:.2f} | "
             f"IV {s.iv:.1f}% | "
@@ -49,6 +57,7 @@ def format_message(s: SignalResult) -> str:
     import config as _cfg
     risk_usd    = _cfg.ACCOUNT_SIZE * _cfg.RISK_PCT
     pos_line    = f"📦 حجم الصفقة: {s.contracts} عقد (مخاطرة ~${risk_usd:.0f})\n" if s.contracts > 0 else ""
+    mtf_warn    = "⚠️ تحذير: لا تأكيد من أي فريم زمني\n" if s.mtf_score == 0 else ""
 
     return (
         f"🤖 إشارة تداول — {s.symbol}\n"
@@ -66,7 +75,8 @@ def format_message(s: SignalResult) -> str:
         f"💠 مستوى الوقف: {s.stop:.2f}\n"
         f"💠 الهدف الأول: {s.target1:.2f}\n"
         f"💠 الهدف الثاني: {s.target2:.2f}\n"
-        f"📊 R:R = {s.rr:.2f}  |  Score: {s.score:.1f}★  |  MTF: {s.mtf_score}/3{' ⚠️' if s.mtf_score == 0 else ''}\n"
+        f"📊 R:R = {s.rr:.2f}  |  Score: {s.score:.1f}★  |  MTF: {s.mtf_score}/3\n"
+        f"{mtf_warn}"
         f"{scalp_line}"
         f"{vwap_line}"
         f"\n"
