@@ -13,20 +13,41 @@ from typing import Optional, List, Dict, TYPE_CHECKING
 if TYPE_CHECKING:
     from analyzer import SignalResult
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+
+def _get_secret(key: str) -> str:
+    """يحاول يقرأ المتغير من st.secrets (Streamlit Cloud) أو os.getenv (Railway/Local)."""
+    # أولاً: st.secrets إذا كنا داخل Streamlit
+    try:
+        import streamlit as st
+        val = st.secrets.get(key, "")
+        if val:
+            return str(val)
+    except Exception:
+        pass
+    # ثانياً: متغيرات البيئة العادية
+    return os.getenv(key, "")
+
+
+SUPABASE_URL = _get_secret("SUPABASE_URL")
+SUPABASE_KEY = _get_secret("SUPABASE_KEY")
 
 TABLE = "signals"
 
 
+def _url() -> str:
+    return SUPABASE_URL or _get_secret("SUPABASE_URL")
+
+def _key() -> str:
+    return SUPABASE_KEY or _get_secret("SUPABASE_KEY")
+
 def is_configured() -> bool:
-    return bool(SUPABASE_URL and SUPABASE_KEY)
+    return bool(_url() and _key())
 
 
 def _headers(prefer: str = "return=representation") -> dict:
     h = {
-        "apikey":        SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "apikey":        _key(),
+        "Authorization": f"Bearer {_key()}",
         "Content-Type":  "application/json",
     }
     if prefer:
@@ -67,7 +88,7 @@ def save_signal(sig: "SignalResult") -> Optional[int]:
 
     try:
         r = requests.post(
-            f"{SUPABASE_URL}/rest/v1/{TABLE}",
+            f"{_url()}/rest/v1/{TABLE}",
             headers=_headers(),
             json=payload,
             timeout=10,
@@ -101,7 +122,7 @@ def update_outcome(
     }
     try:
         r = requests.patch(
-            f"{SUPABASE_URL}/rest/v1/{TABLE}?id=eq.{signal_id}",
+            f"{_url()}/rest/v1/{TABLE}?id=eq.{signal_id}",
             headers=_headers(prefer=""),
             json=payload,
             timeout=10,
@@ -120,7 +141,7 @@ def get_open_signals() -> List[Dict]:
         return []
     try:
         r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/{TABLE}?status=eq.open&select=*",
+            f"{_url()}/rest/v1/{TABLE}?status=eq.open&select=*",
             headers=_headers(prefer=""),
             timeout=10,
         )
@@ -137,7 +158,7 @@ def get_all_signals(limit: int = 1000) -> List[Dict]:
         return []
     try:
         r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/{TABLE}"
+            f"{_url()}/rest/v1/{TABLE}"
             f"?select=*&order=created_at.desc&limit={limit}",
             headers=_headers(prefer=""),
             timeout=10,
