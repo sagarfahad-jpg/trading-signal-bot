@@ -131,6 +131,48 @@ st.markdown("""
 
 @st.cache_data(ttl=60)
 def load_log() -> list:
+    # ── أولاً: Supabase (مشترك مع Railway) ───────────────────────────────────
+    if db.is_configured():
+        try:
+            raw = db.get_all_signals(limit=500)
+            if raw:
+                result = []
+                _status_map = {
+                    "hit_t2":  "WIN_T2 ✅✅",
+                    "hit_t1":  "WIN_T1 ✅",
+                    "stopped": "LOSS ❌",
+                    "expired": "expired",
+                    "open":    None,
+                }
+                for r in raw:
+                    result.append({
+                        "id"             : r.get("id"),
+                        "timestamp"      : str(r.get("created_at", ""))[:19].replace("T", " "),
+                        "symbol"         : r.get("symbol", ""),
+                        "direction"      : r.get("direction", ""),
+                        "confidence"     : r.get("confidence", ""),
+                        "score"          : r.get("score", 0),
+                        "rr"             : r.get("rr", 0),
+                        "vix"            : 0,
+                        "mtf_score"      : 0,
+                        "entry_low"      : r.get("entry_price", 0),
+                        "entry_high"     : r.get("entry_price", 0),
+                        "suggested_entry": r.get("entry_price", 0),
+                        "stop"           : r.get("stop_price", 0),
+                        "target1"        : r.get("target1", 0),
+                        "target2"        : r.get("target2", 0),
+                        "entry_type"     : r.get("entry_type", ""),
+                        "option_price"   : r.get("option_price", 0),
+                        "contracts"      : r.get("contracts", 0),
+                        "sent"           : True,
+                        "outcome"        : _status_map.get(r.get("status", "open")),
+                        "notified"       : True,
+                    })
+                return result
+        except Exception:
+            pass
+
+    # ── ثانياً: ملف محلي (fallback) ──────────────────────────────────────────
     if os.path.exists(LOG_FILE):
         try:
             with open(LOG_FILE, encoding="utf-8") as f:
@@ -250,7 +292,13 @@ if "deep_sym" not in st.session_state:
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 st.sidebar.title("⚙️ إعدادات العرض")
-min_score_ui = st.sidebar.slider("حد الفرصة (Score)", 0.0, 15.0, config.MIN_SCORE, 0.5)
+if "min_score" not in st.session_state:
+    st.session_state["min_score"] = config.MIN_SCORE
+min_score_ui = st.sidebar.slider(
+    "حد الفرصة (Score)", 0.0, 15.0,
+    st.session_state["min_score"], 0.5,
+    key="min_score",
+)
 
 current_wl  = load_watchlist()
 selected_sym = st.sidebar.selectbox("رسم بياني للأصل", current_wl)
