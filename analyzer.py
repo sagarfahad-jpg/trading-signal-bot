@@ -768,11 +768,13 @@ def analyze(
             min_t1     = entry_high + atr * 0.5
             target1    = round(near_res if (resistances and near_res > min_t1) else min_t1, 2)
             target2    = round(target1 + atr * 0.6, 2)
-            if bull_div:    entry_type = 'RSI Divergence 📐'
+            if bull_div:     entry_type = 'RSI Divergence 📐'
             elif bull_sweep: entry_type = 'Liquidity Sweep 🌊'
             elif bull_break: entry_type = 'Breaker Block 🔄'
+            elif bull_ob:    entry_type = 'Order Block 🏛️'
+            elif bull_fvg:   entry_type = 'FVG ⚡'
             elif at_sup or near_pdl: entry_type = 'إعادة اختبار'
-            else:           entry_type = 'اختراق'
+            else:            entry_type = 'اختراق'
         else:
             base       = near_res if at_res else (price + atr * 0.2)
             entry_high = round(base, 2)
@@ -781,11 +783,17 @@ def analyze(
             max_t1     = entry_low - atr * 0.5
             target1    = round(near_sup if (supports and near_sup < max_t1) else max_t1, 2)
             target2    = round(target1 - atr * 0.6, 2)
-            if bear_div:    entry_type = 'RSI Divergence 📐'
+            if bear_div:     entry_type = 'RSI Divergence 📐'
             elif bear_sweep: entry_type = 'Liquidity Sweep 🌊'
             elif bear_break: entry_type = 'Breaker Block 🔄'
+            elif bear_ob:    entry_type = 'Order Block 🏛️'
+            elif bear_fvg:   entry_type = 'FVG ⚡'
             elif at_res or near_pdh: entry_type = 'إعادة اختبار'
-            else:           entry_type = 'اختراق'
+            else:            entry_type = 'اختراق'
+
+        # ── رفع الحد لـ RSI Divergence (+1.5) ────────────────────────────────
+        if 'RSI Divergence' in entry_type and score < effective_min + 1.5:
+            return None
 
         # ── فلتر Risk/Reward ──────────────────────────────────────────────────
         entry_mid = (entry_low + entry_high) / 2
