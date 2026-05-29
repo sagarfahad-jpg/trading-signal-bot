@@ -706,12 +706,24 @@ def analyze(
         if active_zone and htf_direction == ('demand' if direction == 'call' else 'supply'):
             if direction == 'call':
                 htf_stop = round(active_zone.low - atr * 0.15, 2)
-                if htf_stop > stop:   # استخدمه فقط إذا كان أضيق
+                if htf_stop > stop:
                     stop = htf_stop
             else:
                 htf_stop = round(active_zone.high + atr * 0.15, 2)
                 if htf_stop < stop:
                     stop = htf_stop
+
+        # إعادة حساب R:R الحقيقي بعد تضييق الـ Stop
+        if direction == 'call':
+            rr = (target1 - entry_mid) / (entry_mid - stop) if entry_mid > stop else rr
+        else:
+            rr = (entry_mid - target1) / (stop - entry_mid) if stop > entry_mid else rr
+
+        # إعادة تقييم التأكيدات بالاتجاه النهائي (يُصحّح حالة انقلاب الاتجاه)
+        if active_zone:
+            _bc, _brc = cisd_5m(df5)
+            is_cisd     = (direction == 'call' and _bc) or (direction == 'put' and _brc)
+            is_displace = displacement_5m(df5, direction, atr)
 
         is_scalp   = (atr / price) < 0.007
         expiry, strike, option_price, delta, iv, theta = _get_contract(
