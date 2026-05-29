@@ -23,6 +23,10 @@ CORRELATED_GROUPS = [
     ["GOOGL", "META"],       # قطاع الإعلانات الرقمية
 ]
 
+# إدارة المخاطر — Position Sizing
+ACCOUNT_SIZE = float(os.getenv("ACCOUNT_SIZE", "10000"))  # حجم الحساب بالدولار
+RISK_PCT     = 0.01   # نسبة المخاطرة لكل صفقة (1%)
+
 # إعدادات المسح
 SCAN_INTERVAL_MINUTES = 15
 MIN_SCORE = 5.5               # الحد الأدنى لإرسال الإشارة (من 10)

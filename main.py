@@ -9,7 +9,9 @@ import pytz, yfinance as yf
 
 import config
 from analyzer import analyze, get_vix, quick_scan, SignalResult
-from telegram_bot import format_message, send
+from telegram_bot import format_message, send, send_photo
+from chart_generator import generate_signal_chart
+import data_client as _dc
 from weekly_report import send_weekly_report
 from telegram_commands import start_command_listener
 
@@ -324,7 +326,13 @@ def scan():
         print(f"{d} | تقييم: {signal.score:.1f} | R:R {signal.rr:.1f} | MTF: {signal.mtf_score}/2")
 
         msg = format_message(signal)
-        ok  = send(msg, config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
+        # أرسل مع رسم بياني
+        try:
+            df_chart = _dc.get_bars(symbol, '5m', '2d')
+            chart    = generate_signal_chart(df_chart, signal)
+        except Exception:
+            chart = b""
+        ok = send_photo(chart, msg, config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
         log_signal(signal, ok)
 
         if ok:

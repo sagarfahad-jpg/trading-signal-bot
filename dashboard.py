@@ -33,6 +33,15 @@ st.markdown("""
 <style>
     /* ─── عام ─── */
     [data-testid="stMetricValue"] { font-size: 2rem; }
+
+    /* ─── Mobile Responsive ─── */
+    @media (max-width: 768px) {
+        [data-testid="stMetricValue"] { font-size: 1.3rem !important; }
+        .card-sym  { font-size: 1.3rem !important; }
+        .card-row  { font-size: .75rem !important; }
+        [data-testid="column"] { min-width: 140px !important; }
+        .block-container { padding: 0.5rem !important; }
+    }
     .win  { color: #00c853; font-weight: 700; }
     .loss { color: #ff1744; font-weight: 700; }
 
@@ -521,13 +530,26 @@ with tab1:
 
             st.divider()
 
-            # ── صف ٣: تفاصيل العقد
+            # ── صف ٣: تفاصيل العقد + Greeks
             st.caption("📋 تفاصيل العقد")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Expiry",      f"{expiry_fmt} ({expiry_type})")
-            c2.metric("Strike",      f"{sig.strike:.1f}")
-            c3.metric("نوع العقد",   dir_ar)
-            c4.metric("💰 Premium",  premium_str)
+            c1, c2, c3, c4, c5, c6 = st.columns(6)
+            c1.metric("Expiry",        f"{expiry_fmt} ({expiry_type})")
+            c2.metric("Strike",        f"{sig.strike:.1f}")
+            c3.metric("نوع العقد",     dir_ar)
+            c4.metric("💰 Premium",    premium_str)
+            c5.metric("📦 عدد العقود", f"{sig.contracts}")
+            c6.metric("🏦 مخاطرة",     f"${sig.contracts * sig.option_price * 100:.0f}" if sig.option_price > 0 else "—")
+
+            # ── صف ٤: Greeks + VWAP + Regime
+            if sig.delta != 0 or sig.vwap > 0:
+                st.caption("📐 Greeks & Market Context")
+                g1, g2, g3, g4, g5 = st.columns(5)
+                g1.metric("Delta Δ",  f"{sig.delta:.2f}" if sig.delta else "—")
+                g2.metric("IV",       f"{sig.iv:.1f}%" if sig.iv else "—")
+                g3.metric("Theta Θ",  f"{sig.theta:.3f}" if sig.theta else "—")
+                g4.metric("VWAP",     f"{sig.vwap:.2f}" if sig.vwap else "—")
+                regime_map = {'bull': '📈 صاعد', 'bear': '📉 هابط', 'neutral': '↔ محايد'}
+                g5.metric("Regime",   regime_map.get(sig.regime, "—"))
 
     st.divider()
 

@@ -27,10 +27,42 @@ class SignalResult:
     rr: float           # Risk/Reward ratio
     vix: float          # VIX at signal time
     mtf_score: int      # عدد الأطر الزمنية المؤكِّدة (0-2)
-    option_price: float = 0.0  # سعر العقد (Premium) — bid/ask midpoint
+    option_price: float = 0.0   # سعر العقد (Premium) — bid/ask midpoint
+    delta:        float = 0.0   # Delta (0-1)
+    iv:           float = 0.0   # Implied Volatility
+    theta:        float = 0.0   # Theta (daily decay)
+    contracts:    int   = 1     # عدد العقود المقترح (Position Sizing)
+    vwap:         float = 0.0   # VWAP لحظة الإشارة
+    regime:       str   = ""    # "bull" / "bear" / "neutral"
 
 
 # ─── Indicators ───────────────────────────────────────────────────────────────
+
+def _vwap(df: pd.DataFrame) -> pd.Series:
+    """VWAP — Cumulative(Price × Volume) / Cumulative(Volume)"""
+    typical = (df['High'] + df['Low'] + df['Close']) / 3
+    return (typical * df['Volume']).cumsum() / df['Volume'].cumsum().replace(0, np.nan)
+
+
+def _market_regime(df1d: pd.DataFrame) -> str:
+    """
+    تحديد اتجاه السوق:
+    bull   : السعر > SMA200 والـ SMA200 صاعد
+    bear   : السعر < SMA200 والـ SMA200 هابط
+    neutral: غير محدد
+    """
+    if len(df1d) < 25:
+        return "neutral"
+    sma200 = df1d['Close'].rolling(20).mean()
+    last   = float(df1d['Close'].iloc[-1])
+    s_now  = float(sma200.iloc[-1])
+    s_prev = float(sma200.iloc[-5])
+    if last > s_now and s_now > s_prev:
+        return "bull"
+    if last < s_now and s_now < s_prev:
+        return "bear"
+    return "neutral"
+
 
 def _rsi(prices: pd.Series, period: int = 14) -> pd.Series:
     delta = prices.diff()
@@ -223,12 +255,11 @@ def _quick_direction(symbol: str, interval: str, period: str) -> Optional[str]:
 
 # ─── Options contract ─────────────────────────────────────────────────────────
 
-def _get_contract(symbol: str, direction: str, price: float, is_scalp: bool = False) -> Tuple[str, float, float]:
+def _get_contract(symbol: str, direction: str, price: float, is_scalp: bool = False) -> Tuple[str, float, float, float, float, float]:
     """
-    Returns (expiry, strike, option_price).
-    - Scalp  → 0DTE (أقرب expiry اليوم)
-    - عادي   → أقرب جمعة قادمة (أسبوع كامل تقريباً)
-    option_price = bid/ask midpoint or lastPrice
+    Returns (expiry, strike, option_price, delta, iv, theta).
+    - Scalp  → 0DTE
+    - عادي   → أقرب جمعة قادمة
     """
     et        = pytz.timezone('America/New_York')
     today     = datetime.now(et).date()
@@ -238,20 +269,18 @@ def _get_contract(symbol: str, direction: str, price: float, is_scalp: bool = Fa
         ticker      = yf.Ticker(symbol)
         expirations = ticker.options
         if not expirations:
-            return today_str.replace('-', ''), float(round(price)), 0.0
+            return today_str.replace('-', ''), float(round(price)), 0.0, 0.0, 0.0, 0.0
 
         available = [e for e in expirations if e >= today_str]
         if not available:
             available = list(expirations)
 
         if is_scalp:
-            # 0DTE — أقرب expiry (غالباً اليوم)
             expiry = available[0]
         else:
-            # أقرب جمعة قادمة (بعد اليوم)
-            days_ahead = (4 - today.weekday()) % 7   # 4 = الجمعة
+            days_ahead      = (4 - today.weekday()) % 7
             if days_ahead == 0:
-                days_ahead = 7                        # إذا اليوم جمعة، خذ الجمعة التالية
+                days_ahead  = 7
             next_friday     = today + timedelta(days=days_ahead)
             next_friday_str = next_friday.strftime('%Y-%m-%d')
             weekly  = [e for e in available if e >= next_friday_str]
@@ -260,14 +289,13 @@ def _get_contract(symbol: str, direction: str, price: float, is_scalp: bool = Fa
         chain = ticker.option_chain(expiry)
         opts  = chain.calls if direction == 'call' else chain.puts
         if opts.empty:
-            return expiry.replace('-', ''), float(round(price)), 0.0
+            return expiry.replace('-', ''), float(round(price)), 0.0, 0.0, 0.0, 0.0
 
-        opts          = opts.copy()
-        opts['dist']  = (opts['strike'] - price).abs()
-        row           = opts.nsmallest(1, 'dist').iloc[0]
-        strike        = float(row['strike'])
+        opts         = opts.copy()
+        opts['dist'] = (opts['strike'] - price).abs()
+        row          = opts.nsmallest(1, 'dist').iloc[0]
+        strike       = float(row['strike'])
 
-        # سعر العقد: منتصف bid/ask أو lastPrice كـ fallback
         bid  = float(row.get('bid',       0) or 0)
         ask  = float(row.get('ask',       0) or 0)
         last = float(row.get('lastPrice', 0) or 0)
@@ -278,10 +306,15 @@ def _get_contract(symbol: str, direction: str, price: float, is_scalp: bool = Fa
         else:
             option_price = 0.0
 
-        return expiry.replace('-', ''), strike, option_price
+        # Greeks
+        delta = round(float(row.get('delta', 0) or 0), 3)
+        iv    = round(float(row.get('impliedVolatility', 0) or 0) * 100, 1)  # %
+        theta = round(float(row.get('theta', 0) or 0), 3)
+
+        return expiry.replace('-', ''), strike, option_price, delta, iv, theta
 
     except Exception:
-        return today_str.replace('-', ''), float(round(price)), 0.0
+        return today_str.replace('-', ''), float(round(price)), 0.0, 0.0, 0.0, 0.0
 
 
 # ─── Quick scan (للـ Dashboard فقط — بدون options chain أو MTF) ───────────────
@@ -493,6 +526,13 @@ def analyze(
         bull_break, bear_break = _find_breakers(recent, price)
         bull_sweep, bear_sweep = _liquidity_sweep(df5)
 
+        # ── VWAP ──────────────────────────────────────────────────────────────
+        vwap_val    = float(_vwap(df5).iloc[-1])
+        above_vwap  = price > vwap_val
+
+        # ── Market Regime ─────────────────────────────────────────────────────
+        regime = _market_regime(df1d)
+
         # ── Scoring ───────────────────────────────────────────────────────────
         bs = ps = 0.0
 
@@ -532,6 +572,14 @@ def analyze(
 
         if vol_surge and last_bull:      bs += 1.0
         elif vol_surge and not last_bull: ps += 1.0
+
+        # ── VWAP ──────────────────────────────────────────────────────────────
+        if above_vwap:  bs += 1.0
+        else:           ps += 1.0
+
+        # ── Market Regime ─────────────────────────────────────────────────────
+        if regime == "bull":    bs += 0.5
+        elif regime == "bear":  ps += 0.5
 
         # ── فلتر VIX ─────────────────────────────────────────────────────────
         vix = vix_value if vix_value is not None else 20.0
@@ -592,7 +640,13 @@ def analyze(
             return None
 
         is_scalp   = (atr / price) < 0.007
-        expiry, strike, option_price = _get_contract(symbol, direction, price, is_scalp=is_scalp)
+        expiry, strike, option_price, delta, iv, theta = _get_contract(
+            symbol, direction, price, is_scalp=is_scalp)
+
+        # ── Position Sizing ───────────────────────────────────────────────────
+        import config as _cfg
+        risk_amount = _cfg.ACCOUNT_SIZE * _cfg.RISK_PCT
+        contracts   = max(1, int(risk_amount / (option_price * 100))) if option_price > 0 else 1
 
         return SignalResult(
             symbol=symbol, direction=direction, confidence=confidence,
@@ -601,7 +655,8 @@ def analyze(
             entry_type=entry_type, current_price=price,
             is_scalp=is_scalp, expiry=expiry, strike=strike,
             rr=round(rr, 2), vix=round(vix, 1), mtf_score=mtf_score,
-            option_price=option_price,
+            option_price=option_price, delta=delta, iv=iv, theta=theta,
+            contracts=contracts, vwap=round(vwap_val, 2), regime=regime,
         )
 
     except Exception as e:
