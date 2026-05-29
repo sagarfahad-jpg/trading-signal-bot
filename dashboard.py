@@ -311,20 +311,21 @@ status_icon  = "🟢" if is_open else "🔴"
 col_status, col_vix = st.columns([3, 1])
 
 with col_status:
-    st.markdown(f"""
-    <div style="background:{banner_color}; border:1.5px solid {border_color};
-                border-radius:12px; padding:16px 20px; margin-bottom:8px;">
-        <span style="font-size:1.6rem; font-weight:900; color:{border_color};">
-            {status_icon} السوق — {market_label}
-        </span>
-        <br>
-        <span style="color:#aaa; font-size:.9rem;">
-            توقيت نيويورك (ET) &nbsp;|&nbsp;
-            الفحص كل {config.SCAN_INTERVAL_MINUTES} دقيقة
-            {f'&nbsp;|&nbsp; <b style="color:{border_color};">يبدأ الفحص الأول بعد {mins_left} دقيقة</b>' if not is_open and mins_left else ''}
-        </span>
-    </div>
-    """, unsafe_allow_html=True)
+    _premarket_extra = (
+        f'&nbsp;|&nbsp; <b style="color:{border_color};">يبدأ الفحص الأول بعد {mins_left} دقيقة</b>'
+        if not is_open and mins_left else ''
+    )
+    st.markdown(
+        f'<div style="background:{banner_color}; border:1.5px solid {border_color};'
+        f' border-radius:12px; padding:16px 20px; margin-bottom:8px;">'
+        f'<p style="font-size:1.6rem; font-weight:900; color:{border_color}; margin:0 0 4px 0;">'
+        f'{status_icon} السوق — {market_label}</p>'
+        f'<p style="color:#aaa; font-size:.9rem; margin:0;">'
+        f'توقيت نيويورك (ET) &nbsp;|&nbsp; الفحص كل {config.SCAN_INTERVAL_MINUTES} دقيقة'
+        f'{_premarket_extra}</p>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 with col_vix:
     vix_color = "#00c853" if vix < 20 else ("#ffd740" if vix < 28 else "#ff1744")
