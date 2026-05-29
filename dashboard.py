@@ -285,6 +285,26 @@ def save_watchlist(wl: list):
         json.dump(wl, f, ensure_ascii=False, indent=2)
 
 
+# ─── Password Protection ──────────────────────────────────────────────────────
+try:
+    _pwd_required = st.secrets.get("DASHBOARD_PASSWORD", "")
+except Exception:
+    _pwd_required = ""
+if _pwd_required:
+    if not st.session_state.get("authenticated"):
+        st.title("🔒 Trading Signal Bot")
+        st.markdown("---")
+        _col1, _col2, _col3 = st.columns([1, 2, 1])
+        with _col2:
+            _pwd_input = st.text_input("كلمة المرور", type="password", placeholder="أدخل كلمة المرور...")
+            if st.button("دخول 🚀", use_container_width=True):
+                if _pwd_input == _pwd_required:
+                    st.session_state.authenticated = True
+                    st.rerun()
+                else:
+                    st.error("❌ كلمة المرور غير صحيحة")
+        st.stop()
+
 # ─── Session state: استرجاع deep_sym من URL بعد الـ refresh ──────────────────
 if "deep_sym" not in st.session_state:
     st.session_state.deep_sym = st.query_params.get("deep", None)
