@@ -449,6 +449,7 @@ def quick_scan(symbol: str) -> Optional[dict]:
             "bear_break": bear_break,
             "bull_sweep": bull_sweep,
             "bear_sweep": bear_sweep,
+            "regime"    : _market_regime(df1d),
         }
     except Exception as e:
         return None

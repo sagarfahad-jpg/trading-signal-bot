@@ -12,6 +12,7 @@ import json, os
 from datetime import datetime
 import pytz
 import yfinance as yf
+import data_client as _dc
 
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
@@ -161,23 +162,28 @@ def scan_all(min_score: float) -> pd.DataFrame:
                 "Div"    : "✅" if (s.get("bull_div")  or s.get("bear_div"))  else "—",
                 "Break"  : "✅" if (s.get("bull_break") or s.get("bear_break")) else "—",
                 "Sweep"  : "✅" if (s.get("bull_sweep") or s.get("bear_sweep")) else "—",
+                "Regime" : {"bull": "📈 Bull", "bear": "📉 Bear", "neutral": "↔ Neutral"}.get(s.get("regime", ""), "—"),
                 "فرصة؟"  : "✅" if is_opportunity else "❌",
-                "_score_raw": s["score"],
-                "_dir_raw"  : s["direction"],
-                "_entry_low": s["entry_low"],
+                "_score_raw" : s["score"],
+                "_dir_raw"   : s["direction"],
+                "_entry_low" : s["entry_low"],
                 "_entry_high": s["entry_high"],
-                "_stop"     : s["stop"],
-                "_t1"       : s["target1"],
-                "_t2"       : s["target2"],
+                "_stop"      : s["stop"],
+                "_t1"        : s["target1"],
+                "_t2"        : s["target2"],
+                "_regime"    : s.get("regime", ""),
             })
         else:
             rows.append({
                 "الأصل": sym, "الاتجاه": "—", "التقييم": 0,
                 "RSI": "—", "R:R": 0, "السعر": 0, "دخول": "—",
                 "وقف": "—", "هدف 1": "—", "هدف 2": "—",
-                "OB": "—", "FVG": "—", "فرصة؟": "❌",
+                "OB": "—", "FVG": "—",
+                "Div": "—", "Break": "—", "Sweep": "—",
+                "Regime": "—", "فرصة؟": "❌",
                 "_score_raw": 0, "_dir_raw": "", "_entry_low": 0,
                 "_entry_high": 0, "_stop": 0, "_t1": 0, "_t2": 0,
+                "_regime": "",
             })
     df = pd.DataFrame(rows)
     return df.sort_values("التقييم", ascending=False).reset_index(drop=True)
@@ -185,8 +191,7 @@ def scan_all(min_score: float) -> pd.DataFrame:
 
 @st.cache_data(ttl=60)
 def fetch_chart(symbol: str):
-    df = yf.Ticker(symbol).history(period="2d", interval="5m", auto_adjust=True)
-    return df
+    return _dc.get_bars(symbol, '5m', '2d')
 
 
 def outcome_stats(log: list):
@@ -420,8 +425,34 @@ with tab1:
 
     st.divider()
 
+    # ── Smart Filter Bar ──────────────────────────────────────────────────────
+    sf1, sf2, sf3 = st.columns([3, 2, 1])
+    sf_dir = sf1.radio(
+        "🔀 الاتجاه",
+        ["الكل 📊", "CALL 🟢", "PUT 🔴"],
+        horizontal=True, key="sf_dir",
+    )
+    sf_reg = sf2.selectbox(
+        "🌐 Regime",
+        ["الكل", "Bull 📈", "Bear 📉", "Neutral ↔"],
+        key="sf_reg",
+    )
+    sf_opp = sf3.checkbox("✅ فرص فقط", value=False, key="sf_opp")
+
+    df_filtered = df_scan.copy()
+    if sf_dir == "CALL 🟢":
+        df_filtered = df_filtered[df_filtered["_dir_raw"] == "call"]
+    elif sf_dir == "PUT 🔴":
+        df_filtered = df_filtered[df_filtered["_dir_raw"] == "put"]
+    _regime_rev = {"Bull 📈": "bull", "Bear 📉": "bear", "Neutral ↔": "neutral"}
+    if sf_reg != "الكل":
+        df_filtered = df_filtered[df_filtered["_regime"] == _regime_rev.get(sf_reg, "")]
+    if sf_opp:
+        df_filtered = df_filtered[df_filtered["فرصة؟"] == "✅"]
+    df_filtered = df_filtered.reset_index(drop=True)
+
     # ── Opportunity Cards ─────────────────────────────────────────────────────
-    ready = df_scan[df_scan["فرصة؟"] == "✅"].head(5)
+    ready = df_filtered[df_filtered["فرصة؟"] == "✅"].head(5)
 
     if "deep_sym" not in st.session_state:
         st.session_state.deep_sym = None
@@ -437,6 +468,10 @@ with tab1:
             card_cls  = "card-call" if is_call else "card-put"
             score_pct = min(row["التقييم"] / 15 * 100, 100)
             mid_entry = round((row["_entry_low"] + row["_entry_high"]) / 2, 2)
+            regime_color = {"bull": "#00e676", "bear": "#ff5252", "neutral": "#888"}.get(
+                str(row.get("_regime", "")), "#888")
+            regime_label = {"bull": "📈 Bull", "bear": "📉 Bear", "neutral": "↔ Neutral"}.get(
+                str(row.get("_regime", "")), "—")
 
             with card_cols[i]:
                 st.markdown(f"""
@@ -473,6 +508,10 @@ with tab1:
                     <div class="card-row">
                         <span>R:R</span>
                         <span class="card-val">{row['R:R']}</span>
+                    </div>
+                    <div class="card-row">
+                        <span>Regime</span>
+                        <span class="card-val" style="color:{regime_color};">{regime_label}</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -556,8 +595,8 @@ with tab1:
     # ── Full Table ────────────────────────────────────────────────────────────
     st.subheader("📋 مسح كامل للأصول")
 
-    display_cols = ["الأصل","الاتجاه","التقييم","RSI","R:R","السعر","دخول","وقف","هدف 1","هدف 2","OB","FVG","Div","Break","Sweep","فرصة؟"]
-    df_display   = df_scan[display_cols]
+    display_cols = ["الأصل","الاتجاه","التقييم","RSI","R:R","السعر","دخول","وقف","هدف 1","هدف 2","OB","FVG","Div","Break","Sweep","Regime","فرصة؟"]
+    df_display   = df_filtered[display_cols]
 
     fmt = {
         "التقييم": "{:.1f}",
@@ -643,6 +682,8 @@ with tab2:
 
         if wins + losses > 0:
             st.subheader("📊 الأداء الإجمالي")
+
+            # ── Pie + KPIs ────────────────────────────────────────────────────
             fig_pie = go.Figure(go.Pie(
                 labels=["فوز ✅", "خسارة ❌"],
                 values=[wins, losses],
@@ -658,6 +699,103 @@ with tab2:
             ca, cb, cc = st.columns([1,1,1])
             with cb:
                 st.plotly_chart(fig_pie, width="stretch")
+
+            # ── منحنى الأرباح التراكمية (R-Multiples) ────────────────────────
+            st.subheader("📈 منحنى الأرباح التراكمية")
+            st.caption("WIN_T2 = R:R كامل  |  WIN_T1 = نصف R:R  |  LOSS = −1R")
+
+            decided = [e for e in log if
+                       "WIN" in str(e.get("outcome", "")) or
+                       "LOSS" in str(e.get("outcome", ""))]
+            if decided:
+                r_rows = []
+                for e in decided:
+                    outcome = str(e.get("outcome", ""))
+                    rr_val  = float(e.get("rr", 1.5) or 1.5)
+                    if   "WIN_T2" in outcome: r_val = rr_val
+                    elif "WIN_T1" in outcome: r_val = rr_val * 0.5
+                    elif "LOSS"   in outcome: r_val = -1.0
+                    else: continue
+                    r_rows.append({
+                        "idx"   : e["timestamp"][:16],
+                        "symbol": e.get("symbol", ""),
+                        "R"     : r_val,
+                    })
+
+                if r_rows:
+                    df_r = pd.DataFrame(r_rows)
+                    df_r["cum_R"] = df_r["R"].cumsum()
+                    total_r      = round(float(df_r["R"].sum()), 2)
+                    clr_total    = "#00c853" if total_r >= 0 else "#ff1744"
+
+                    fig_eq = go.Figure()
+                    # منطقة خضراء/حمراء حسب الاتجاه
+                    fig_eq.add_trace(go.Scatter(
+                        x=list(range(1, len(df_r) + 1)),
+                        y=df_r["cum_R"].tolist(),
+                        name="R التراكمي",
+                        line=dict(color=clr_total, width=2.5),
+                        fill="tozeroy",
+                        fillcolor=f"{'rgba(0,200,83,0.10)' if total_r >= 0 else 'rgba(255,23,68,0.10)'}",
+                        text=[f"{r['symbol']}: {'+' if r['R'] > 0 else ''}{r['R']:.1f}R"
+                              for _, r in df_r.iterrows()],
+                        hoverinfo="text+y",
+                    ))
+                    fig_eq.add_hline(y=0, line_dash="dash",
+                                     line_color="#555", opacity=0.9)
+                    fig_eq.update_layout(
+                        title=dict(
+                            text=(f"إجمالي الأداء: "
+                                  f"<b style='color:{clr_total};'>"
+                                  f"{'+' if total_r >= 0 else ''}{total_r}R</b>"
+                                  f"   ({len(r_rows)} إشارة)"),
+                            font=dict(color="white", size=14),
+                        ),
+                        paper_bgcolor="#0f0f1a", plot_bgcolor="#0f0f1a",
+                        font_color="white", height=280,
+                        xaxis=dict(gridcolor="#1e1e2e",
+                                   title=dict(text="رقم الإشارة", font=dict(color="#aaa"))),
+                        yaxis=dict(gridcolor="#1e1e2e",
+                                   title=dict(text="R Multiples", font=dict(color="#aaa"))),
+                        margin=dict(l=10, r=10, t=50, b=10),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(fig_eq, width="stretch")
+            else:
+                st.info("📭 لا توجد نتائج WIN/LOSS مسجّلة بعد — المنحنى يظهر تلقائياً.")
+
+            # ── نسبة الفوز حسب نوع الدخول ────────────────────────────────────
+            et_decided = [e for e in log
+                          if e.get("entry_type")
+                          and ("WIN" in str(e.get("outcome", ""))
+                               or "LOSS" in str(e.get("outcome", "")))]
+            if et_decided:
+                st.subheader("🏆 أداء كل نوع دخول")
+                et_stats: dict = {}
+                for e in et_decided:
+                    et = e["entry_type"]
+                    if et not in et_stats:
+                        et_stats[et] = {"wins": 0, "losses": 0}
+                    if "WIN" in str(e.get("outcome", "")):
+                        et_stats[et]["wins"] += 1
+                    else:
+                        et_stats[et]["losses"] += 1
+
+                et_rows = [{
+                    "نوع الدخول": et,
+                    "فوز ✅"    : v["wins"],
+                    "خسارة ❌"  : v["losses"],
+                    "WR %"      : round(v["wins"] / (v["wins"] + v["losses"]) * 100)
+                                  if v["wins"] + v["losses"] > 0 else 0,
+                } for et, v in et_stats.items()]
+
+                df_et = pd.DataFrame(et_rows).sort_values("WR %", ascending=False)
+                st.dataframe(
+                    df_et.style.background_gradient(
+                        subset=["WR %"], cmap="RdYlGn", vmin=30, vmax=80,
+                    ),
+                    width="stretch",
+                )
 
 
 # ── Tab 3: Chart ───────────────────────────────────────────────────────────────

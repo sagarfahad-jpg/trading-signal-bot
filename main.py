@@ -81,6 +81,10 @@ def log_signal(signal: SignalResult, sent_ok: bool):
         "target2"    : signal.target2,
         "expiry"     : signal.expiry,
         "strike"     : signal.strike,
+        "entry_type" : signal.entry_type,
+        "option_price": signal.option_price,
+        "contracts"  : signal.contracts,
+        "regime"     : signal.regime,
         "sent"       : sent_ok,
         "outcome"    : None,
         "notified"   : False,   # هل أُرسل إشعار النتيجة النهائية؟
