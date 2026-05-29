@@ -105,7 +105,14 @@ st.markdown("""
                       height:8px; margin:10px 0 4px; overflow:hidden; }
     .score-bar { height:8px; border-radius:8px; }
 </style>
-<meta http-equiv="refresh" content="60">
+<script>
+(function() {
+    // لا تحدّث الصفحة إذا كان URL يحتوي على ?deep=
+    if (!window.location.search.includes('deep=')) {
+        setTimeout(function() { window.location.reload(); }, 60000);
+    }
+})();
+</script>
 """, unsafe_allow_html=True)
 
 
@@ -221,10 +228,14 @@ def save_watchlist(wl: list):
         json.dump(wl, f, ensure_ascii=False, indent=2)
 
 
+# ─── Session state: استرجاع deep_sym من URL بعد الـ refresh ──────────────────
+if "deep_sym" not in st.session_state:
+    st.session_state.deep_sym = st.query_params.get("deep", None)
+
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 st.sidebar.title("⚙️ إعدادات العرض")
-min_score_ui = st.sidebar.slider("حد الفرصة (Score)", 0.0, 10.0, config.MIN_SCORE, 0.5)
+min_score_ui = st.sidebar.slider("حد الفرصة (Score)", 0.0, 15.0, config.MIN_SCORE, 0.5)
 
 current_wl  = load_watchlist()
 selected_sym = st.sidebar.selectbox("رسم بياني للأصل", current_wl)
@@ -403,6 +414,9 @@ with tab1:
     # ── Opportunity Cards ─────────────────────────────────────────────────────
     ready = df_scan[df_scan["فرصة؟"] == "✅"].head(5)
 
+    if "deep_sym" not in st.session_state:
+        st.session_state.deep_sym = None
+
     if not ready.empty:
         st.subheader(f"🎯 الفرص الجاهزة الآن ({len(ready)})")
         card_cols = st.columns(min(len(ready), 5))
@@ -412,7 +426,7 @@ with tab1:
             dir_color = "#00e676" if is_call else "#ff5252"
             dir_ar    = "كول 🟢" if is_call else "بوت 🔴"
             card_cls  = "card-call" if is_call else "card-put"
-            score_pct = min(row["التقييم"] / 10 * 100, 100)
+            score_pct = min(row["التقييم"] / 15 * 100, 100)
             mid_entry = round((row["_entry_low"] + row["_entry_high"]) / 2, 2)
 
             with card_cols[i]:
@@ -425,8 +439,12 @@ with tab1:
                              style="width:{score_pct:.0f}%;background:{dir_color};"></div>
                     </div>
                     <p style="font-size:.75rem;color:#aaa;margin:0 0 10px;">
-                        تقييم {row['التقييم']:.1f} / 10
+                        تقييم {row['التقييم']:.1f} ★
                     </p>
+                    <div class="card-row">
+                        <span>منطقة الدخول</span>
+                        <span class="card-val" style="font-size:.78rem;">{row['_entry_low']:.2f} – {row['_entry_high']:.2f}</span>
+                    </div>
                     <div class="card-row">
                         <span>دخول مقترح</span>
                         <span class="card-val">{mid_entry}</span>
@@ -449,8 +467,67 @@ with tab1:
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+                # زر التحليل العميق
+                btn_label = "⏳ جاري..." if st.session_state.deep_sym == row["الأصل"] else "🔍 تحليل عميق"
+                if st.button(btn_label, key=f"deep_{row['الأصل']}", use_container_width=True):
+                    st.session_state.deep_sym = row["الأصل"]
+                    st.query_params["deep"] = row["الأصل"]
+                    st.rerun()
+
     else:
         st.info("لا توجد فرص تستوفي الشروط حالياً — انتظر الفحص القادم.")
+
+    # ── Deep Analysis Panel ───────────────────────────────────────────────────
+    if st.session_state.deep_sym:
+        sym = st.session_state.deep_sym
+        st.divider()
+        col_h, col_x = st.columns([6, 1])
+        col_h.subheader(f"🔬 تحليل عميق — {sym}")
+        if col_x.button("✕ إغلاق", key="close_deep"):
+            st.session_state.deep_sym = None
+            st.query_params.clear()
+            st.rerun()
+
+        with st.spinner(f"جاري جلب البيانات وتحليل العقود لـ {sym}... (قد يستغرق 10-20 ثانية)"):
+            sig = analyze(sym, min_score=0, min_rr=0, require_mtf=False)
+
+        if sig is None:
+            st.warning(f"لم يتوفر تحليل كافٍ لـ {sym} حالياً.")
+        else:
+            dir_ar      = "كول 🟢"  if sig.direction == "call" else "بوت 🔴"
+            conf_ar     = "عالية 🟢" if sig.confidence == "high" else "متوسطة 🟡"
+            mid_e       = round((sig.entry_low + sig.entry_high) / 2, 2)
+            expiry_fmt  = f"{sig.expiry[:4]}-{sig.expiry[4:6]}-{sig.expiry[6:]}" if len(sig.expiry) == 8 else sig.expiry
+            expiry_type = "0DTE ⚡" if sig.is_scalp else "أسبوعي 📅"
+            premium_str = f"~${sig.option_price:.2f}" if sig.option_price > 0 else "—"
+
+            # ── صف ١: ملخص
+            d1, d2, d3, d4, d5 = st.columns(5)
+            d1.metric("الاتجاه",  dir_ar)
+            d2.metric("التقييم",  f"{sig.score:.1f} ★")
+            d3.metric("الثقة",    conf_ar)
+            d4.metric("R:R",      f"{sig.rr:.2f}")
+            d5.metric("MTF",      f"{sig.mtf_score}/2")
+
+            # ── صف ٢: مستويات التداول
+            st.caption("📍 مستويات التداول")
+            e1, e2, e3, e4, e5, e6 = st.columns(6)
+            e1.metric("نوع الدخول",    sig.entry_type)
+            e2.metric("منطقة الدخول", f"{sig.entry_low:.2f} – {sig.entry_high:.2f}")
+            e3.metric("دخول مقترح ◀️", str(mid_e))
+            e4.metric("🛑 وقف",        f"{sig.stop:.2f}")
+            e5.metric("✅ هدف ١",       f"{sig.target1:.2f}")
+            e6.metric("✅✅ هدف ٢",      f"{sig.target2:.2f}")
+
+            st.divider()
+
+            # ── صف ٣: تفاصيل العقد
+            st.caption("📋 تفاصيل العقد")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Expiry",      f"{expiry_fmt} ({expiry_type})")
+            c2.metric("Strike",      f"{sig.strike:.1f}")
+            c3.metric("نوع العقد",   dir_ar)
+            c4.metric("💰 Premium",  premium_str)
 
     st.divider()
 
