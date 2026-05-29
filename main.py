@@ -90,8 +90,10 @@ def log_signal(signal: SignalResult, sent_ok: bool):
         "entry_type" : signal.entry_type,
         "option_price": signal.option_price,
         "contracts"  : signal.contracts,
-        "regime"     : signal.regime,
-        "sent"       : sent_ok,
+        "regime"         : signal.regime,
+        "smt_divergence" : signal.smt_divergence,
+        "smt_direction"  : signal.smt_direction,
+        "sent"           : sent_ok,
         "outcome"    : None,
         "notified"   : False,   # هل أُرسل إشعار النتيجة النهائية؟
         "be_notified": False,   # هل أُرسل تنبيه تحريك الوقف (break-even)؟

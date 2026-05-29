@@ -81,9 +81,11 @@ def save_signal(sig: "SignalResult") -> Optional[int]:
         "htf_zone_tf":   sig.htf_zone_tf,
         "htf_zone_type": sig.htf_zone_type,
         "htf_direction": sig.htf_direction,
-        "cisd":          sig.cisd,
-        "displacement":  sig.displacement,
-        "status":        "open",
+        "cisd":           sig.cisd,
+        "displacement":   sig.displacement,
+        "smt_divergence": sig.smt_divergence,
+        "smt_direction":  sig.smt_direction,
+        "status":         "open",
     }
 
     try:
