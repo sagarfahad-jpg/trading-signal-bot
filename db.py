@@ -228,8 +228,12 @@ def update_outcome(
     status: str,
     outcome_price: float,
     r_multiple: float,
+    exit_reason: str = "",
+    duration_min: Optional[int] = None,
+    max_favorable: Optional[float] = None,
+    max_adverse: Optional[float] = None,
 ) -> bool:
-    """يحدّث نتيجة إشارة موجودة."""
+    """يحدّث نتيجة إشارة موجودة مع تفاصيل سلامة البيانات."""
     if not is_configured():
         return False
 
@@ -239,6 +243,14 @@ def update_outcome(
         "outcome_time":  datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "r_multiple":    round(r_multiple, 3),
     }
+    if exit_reason:
+        payload["exit_reason"] = exit_reason
+    if duration_min is not None:
+        payload["duration_min"] = int(duration_min)
+    if max_favorable is not None:
+        payload["max_favorable"] = round(max_favorable, 3)
+    if max_adverse is not None:
+        payload["max_adverse"] = round(max_adverse, 3)
     try:
         r = requests.patch(
             f"{_url()}/rest/v1/{TABLE}?id=eq.{signal_id}",

@@ -1439,6 +1439,54 @@ with tab5:
 
             st.divider()
 
+            # ── رؤى سلامة البيانات (MFE/MAE/المدة/سبب الخروج) ──────────────────
+            st.subheader("🔬 رؤى متقدمة")
+            di1, di2, di3, di4 = st.columns(4)
+
+            _dur = pd.to_numeric(decided.get("duration_min"), errors="coerce").dropna() \
+                   if "duration_min" in decided.columns else pd.Series(dtype=float)
+            di1.metric("⏱ متوسط مدة الصفقة",
+                       f"{_dur.mean():.0f} دقيقة" if not _dur.empty else "—")
+
+            _mfe = pd.to_numeric(decided.get("max_favorable"), errors="coerce").dropna() \
+                   if "max_favorable" in decided.columns else pd.Series(dtype=float)
+            di2.metric("📈 متوسط أقصى ربح (MFE)",
+                       f"+{_mfe.mean():.2f}R" if not _mfe.empty else "—")
+
+            _mae = pd.to_numeric(decided.get("max_adverse"), errors="coerce").dropna() \
+                   if "max_adverse" in decided.columns else pd.Series(dtype=float)
+            di3.metric("📉 متوسط أقصى خسارة (MAE)",
+                       f"{_mae.mean():.2f}R" if not _mae.empty else "—")
+
+            # خسائر كانت قريبة من الهدف ثم انعكست (MFE عالي لكن خسرت)
+            if "max_favorable" in decided.columns:
+                _losers = decided[decided["status"].isin(["stopped"])]
+                _near   = pd.to_numeric(_losers.get("max_favorable"), errors="coerce").dropna()
+                _almost = int((_near >= 0.8).sum()) if not _near.empty else 0
+                di4.metric("😖 خسائر اقتربت من الهدف", _almost,
+                           help="وصلت ≥0.8R ثم انعكست للوقف")
+
+            # ── توزيع أسباب الخروج ─────────────────────────────────────────────
+            if "exit_reason" in decided.columns and decided["exit_reason"].notna().any():
+                _reason_ar = {
+                    "target2": "✅✅ هدف ٢", "target1": "✅ هدف ١",
+                    "stop": "❌ وقف", "stop_after_t1": "🔒 تعادل بعد T1",
+                    "trailing_stop": "🪤 Trailing", "manual": "🚪 خروج يدوي",
+                    "manual_cancel": "✖ إلغاء", "expired_no_entry": "⌛ انتهت",
+                }
+                _rc = decided["exit_reason"].map(lambda x: _reason_ar.get(x, x)).value_counts()
+                fig_rs = go.Figure(go.Pie(
+                    labels=_rc.index.tolist(), values=_rc.values.tolist(), hole=0.5,
+                ))
+                fig_rs.update_layout(
+                    title=dict(text="توزيع أسباب الخروج", font=dict(color="white", size=13)),
+                    paper_bgcolor="rgba(0,0,0,0)", font_color="white",
+                    height=300, margin=dict(l=10, r=10, t=40, b=10),
+                )
+                st.plotly_chart(fig_rs, use_container_width=True)
+
+            st.divider()
+
         # ── جدول الإشارات الأخيرة ──────────────────────────────────────────────
         st.subheader("📋 آخر الإشارات")
 
