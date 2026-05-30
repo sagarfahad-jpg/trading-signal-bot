@@ -55,7 +55,12 @@ def format_message(s: SignalResult) -> str:
 
     # ── Position Sizing ───────────────────────────────────────────────────────
     import config as _cfg
-    risk_usd    = _cfg.ACCOUNT_SIZE * _cfg.RISK_PCT
+    try:
+        import db as _db
+        _acct = _db.get_account_size(_cfg.ACCOUNT_SIZE)
+    except Exception:
+        _acct = _cfg.ACCOUNT_SIZE
+    risk_usd    = _acct * _cfg.RISK_PCT
     pos_line    = f"📦 حجم الصفقة: {s.contracts} عقد (مخاطرة ~${risk_usd:.0f})\n" if s.contracts > 0 else ""
     mtf_warn    = "⚠️ تحذير: لا تأكيد من أي فريم زمني\n" if s.mtf_score == 0 else ""
 

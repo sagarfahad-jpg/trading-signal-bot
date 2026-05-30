@@ -900,7 +900,12 @@ def analyze(
 
         # ── Position Sizing ───────────────────────────────────────────────────
         import config as _cfg
-        risk_amount = _cfg.ACCOUNT_SIZE * _cfg.RISK_PCT
+        try:
+            import db as _db
+            _acct = _db.get_account_size(_cfg.ACCOUNT_SIZE)
+        except Exception:
+            _acct = _cfg.ACCOUNT_SIZE
+        risk_amount = _acct * _cfg.RISK_PCT
         contracts   = max(1, int(risk_amount / (option_price * 100))) if option_price > 0 else 1
 
         return SignalResult(

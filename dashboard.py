@@ -330,6 +330,26 @@ if st.sidebar.button("💾 حفظ للبوت", use_container_width=True):
     else:
         st.sidebar.error("❌ فشل الحفظ")
 
+# ── رأس المال ─────────────────────────────────────────────────────────────────
+if "account_size" not in st.session_state:
+    _acc_remote = db.get_config("account_size", str(config.ACCOUNT_SIZE))
+    try:
+        st.session_state["account_size"] = float(_acc_remote)
+    except Exception:
+        st.session_state["account_size"] = config.ACCOUNT_SIZE
+
+account_size_ui = st.sidebar.number_input(
+    "💰 رأس المال ($)", min_value=100.0, max_value=10_000_000.0,
+    value=st.session_state["account_size"], step=100.0,
+    key="account_size",
+)
+st.sidebar.caption(f"المخاطرة لكل صفقة: ${account_size_ui * config.RISK_PCT:.0f} ({config.RISK_PCT*100:.0f}%)")
+if st.sidebar.button("💾 حفظ رأس المال", use_container_width=True):
+    if db.set_config("account_size", str(account_size_ui)):
+        st.sidebar.success(f"✅ تم الحفظ — رأس المال ${account_size_ui:.0f}")
+    else:
+        st.sidebar.error("❌ فشل الحفظ")
+
 current_wl  = load_watchlist()
 selected_sym = st.sidebar.selectbox("رسم بياني للأصل", current_wl)
 show_levels  = st.sidebar.checkbox("عرض مستويات الإشارة على الرسم", value=True)
@@ -475,7 +495,7 @@ st.divider()
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 مسح الأصول", "📋 سجل الإشارات", "📈 الرسم البياني", "🧪 Backtest", "🏆 أداء الإشارات"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 مسح الأصول", "📋 سجل الإشارات", "📈 الرسم البياني", "🧪 Backtest", "🏆 أداء الإشارات", "💼 صفقاتي"])
 
 
 # ── Tab 1: Asset Scanner ───────────────────────────────────────────────────────
@@ -1447,3 +1467,163 @@ with tab5:
             width="stretch",
             height=450,
         )
+
+
+# ── Tab 6: My Trades (دفتر الصفقات اليدوي) ─────────────────────────────────────
+with tab6:
+    st.subheader("💼 دفتر صفقاتي الفعلية")
+    st.caption("سجّل صفقاتك الحقيقية وقارن أداءك بتوصيات البوت")
+
+    if not db.is_configured():
+        st.warning("⚠️ Supabase غير مفعّل — لا يمكن حفظ الصفقات.")
+        st.stop()
+
+    @st.cache_data(ttl=30)
+    def _load_my_trades():
+        return db.get_my_trades(limit=500)
+
+    my_trades = _load_my_trades()
+
+    # ── إحصائيات شخصية ────────────────────────────────────────────────────────
+    _closed = [t for t in my_trades if t.get("status") in ("WIN", "LOSS")]
+    _open   = [t for t in my_trades if t.get("status") == "OPEN"]
+    if _closed:
+        _w   = len([t for t in _closed if t["status"] == "WIN"])
+        _l   = len(_closed) - _w
+        _wr  = round(_w / len(_closed) * 100)
+        _pnl = round(sum(float(t.get("pnl_dollar") or 0) for t in _closed), 2)
+    else:
+        _w = _l = _wr = 0
+        _pnl = 0.0
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("📊 إجمالي", len(my_trades))
+    m2.metric("🔵 مفتوحة", len(_open))
+    m3.metric("✅ فوز", _w, delta=f"{_wr}%" if _closed else None)
+    m4.metric("❌ خسارة", _l)
+    _pnl_clr = "normal" if _pnl >= 0 else "inverse"
+    m5.metric("💵 صافي الربح", f"{'+' if _pnl >= 0 else ''}${_pnl:.0f}")
+
+    st.divider()
+
+    # ── إضافة صفقة جديدة ──────────────────────────────────────────────────────
+    with st.expander("➕ إضافة صفقة جديدة", expanded=not my_trades):
+        af1, af2, af3 = st.columns(3)
+        _t_sym   = af1.text_input("الأصل", "").upper().strip()
+        _t_side  = af2.selectbox("الاتجاه", ["CALL", "PUT"])
+        _t_entry = af3.number_input("سعر الدخول ($)", min_value=0.0, step=0.05, format="%.2f")
+
+        af4, af5, af6 = st.columns(3)
+        _t_qty    = af4.number_input("عدد العقود", min_value=1, value=1, step=1)
+        _t_stop   = af5.number_input("الوقف (السهم)", min_value=0.0, step=0.1, format="%.2f")
+        _t_target = af6.number_input("الهدف (السهم)", min_value=0.0, step=0.1, format="%.2f")
+
+        _t_from = st.checkbox("من توصية البوت", value=True)
+        _t_notes = st.text_input("ملاحظات", "")
+
+        if st.button("💾 حفظ الصفقة", type="primary"):
+            if _t_sym and _t_entry > 0:
+                ok = db.add_my_trade({
+                    "entry_date":   datetime.now().strftime("%Y-%m-%d"),
+                    "symbol":       _t_sym,
+                    "side":         _t_side,
+                    "entry_price":  round(_t_entry, 2),
+                    "contracts":    int(_t_qty),
+                    "stop_price":   round(_t_stop, 2) if _t_stop else None,
+                    "target_price": round(_t_target, 2) if _t_target else None,
+                    "from_signal":  _t_from,
+                    "status":       "OPEN",
+                    "notes":        _t_notes,
+                })
+                if ok:
+                    st.cache_data.clear()
+                    st.success(f"✅ أُضيفت صفقة {_t_sym}")
+                    st.rerun()
+                else:
+                    st.error("❌ فشل الحفظ")
+            else:
+                st.warning("أدخل الأصل وسعر الدخول")
+
+    st.divider()
+
+    # ── الصفقات المفتوحة (إغلاق) ──────────────────────────────────────────────
+    if _open:
+        st.subheader("🔵 الصفقات المفتوحة")
+        for t in _open:
+            oc1, oc2, oc3, oc4 = st.columns([3, 2, 2, 1])
+            _side_emoji = "🟢" if t["side"] == "CALL" else "🔴"
+            oc1.markdown(
+                f"**{t['symbol']}** {_side_emoji} {t['side']}  \n"
+                f"<span style='color:#888;font-size:.85rem;'>دخول: ${t['entry_price']} × {t.get('contracts',1)} عقد</span>",
+                unsafe_allow_html=True,
+            )
+            _exit_px = oc2.number_input(
+                "سعر الخروج ($)", min_value=0.0, step=0.05, format="%.2f",
+                key=f"exit_{t['id']}",
+            )
+            if oc3.button("🔒 إغلاق", key=f"close_{t['id']}"):
+                if _exit_px > 0:
+                    _entry = float(t["entry_price"])
+                    _qty   = int(t.get("contracts", 1))
+                    # P&L أوبشنز = (خروج − دخول) × 100 × عقود
+                    _pnl_d = (_exit_px - _entry) * 100 * _qty
+                    _pnl_p = (_exit_px - _entry) / _entry * 100 if _entry else 0
+                    _st    = "WIN" if _pnl_d >= 0 else "LOSS"
+                    if db.close_my_trade(t["id"], _exit_px, _pnl_d, _pnl_p, _st):
+                        st.cache_data.clear()
+                        st.rerun()
+            if oc4.button("🗑", key=f"del_my_{t['id']}"):
+                if db.delete_my_trade(t["id"]):
+                    st.cache_data.clear()
+                    st.rerun()
+        st.divider()
+
+    # ── سجل الصفقات المغلقة ───────────────────────────────────────────────────
+    if _closed:
+        st.subheader("📋 الصفقات المغلقة")
+        df_my = pd.DataFrame(_closed)
+        df_my["النتيجة"] = df_my["status"].map({"WIN": "✅ فوز", "LOSS": "❌ خسارة"})
+        df_my["الاتجاه"] = df_my["side"].map({"CALL": "🟢 CALL", "PUT": "🔴 PUT"})
+        df_my["مصدر"]    = df_my["from_signal"].map({True: "🤖 بوت", False: "👤 شخصي"})
+        df_my["P&L $"]   = df_my["pnl_dollar"].apply(
+            lambda x: f"{'+' if x>=0 else ''}${x:.0f}" if pd.notna(x) else "—")
+        df_my["P&L %"]   = df_my["pnl_pct"].apply(
+            lambda x: f"{'+' if x>=0 else ''}{x:.1f}%" if pd.notna(x) else "—")
+
+        df_my_show = df_my[["entry_date","symbol","الاتجاه","entry_price",
+                            "exit_price","P&L $","P&L %","مصدر","النتيجة"]].rename(columns={
+            "entry_date":  "التاريخ",
+            "symbol":      "الأصل",
+            "entry_price": "دخول",
+            "exit_price":  "خروج",
+        })
+
+        def _color_pnl(val):
+            if str(val).startswith("+"): return "color:#00c853;font-weight:bold"
+            if str(val).startswith("-") or "خسارة" in str(val): return "color:#ff1744;font-weight:bold"
+            if "فوز" in str(val): return "color:#00c853;font-weight:bold"
+            return ""
+
+        st.dataframe(
+            df_my_show.style
+                .map(_color_pnl, subset=["P&L $","P&L %","النتيجة"])
+                .format({"دخول": "{:.2f}", "خروج": "{:.2f}"}, na_rep="—"),
+            width="stretch", height=400,
+        )
+
+        # ── مقارنة البوت vs الشخصي ─────────────────────────────────────────────
+        _sys = [t for t in _closed if t.get("from_signal")]
+        _own = [t for t in _closed if not t.get("from_signal")]
+        if _sys and _own:
+            st.caption("⚖️ مقارنة: توصيات البوت مقابل اختياراتك")
+            cmp1, cmp2 = st.columns(2)
+            _sys_wr  = round(len([t for t in _sys if t["status"]=="WIN"])/len(_sys)*100)
+            _own_wr  = round(len([t for t in _own if t["status"]=="WIN"])/len(_own)*100)
+            _sys_pnl = sum(float(t.get("pnl_dollar") or 0) for t in _sys)
+            _own_pnl = sum(float(t.get("pnl_dollar") or 0) for t in _own)
+            cmp1.metric("🤖 صفقات البوت", f"{_sys_wr}% فوز",
+                        delta=f"{'+' if _sys_pnl>=0 else ''}${_sys_pnl:.0f}")
+            cmp2.metric("👤 اختياراتك", f"{_own_wr}% فوز",
+                        delta=f"{'+' if _own_pnl>=0 else ''}${_own_pnl:.0f}")
+    elif not _open:
+        st.info("📭 لا توجد صفقات بعد — أضف أول صفقة من الأعلى.")

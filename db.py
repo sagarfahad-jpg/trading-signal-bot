@@ -157,6 +157,25 @@ def get_config(key: str, default: str = "") -> str:
     return default
 
 
+_acct_cache: dict = {"ts": 0.0, "value": None}
+
+def get_account_size(default: float) -> float:
+    """يجلب رأس المال من Supabase (cache 5 دقائق)."""
+    import time as _t
+    now = _t.time()
+    if now - float(_acct_cache["ts"]) < 300 and _acct_cache["value"]:
+        return float(_acct_cache["value"])
+    try:
+        val = get_config("account_size", "")
+        if val:
+            _acct_cache["value"] = float(val)
+            _acct_cache["ts"]    = now
+            return float(val)
+    except Exception:
+        pass
+    return default
+
+
 def set_config(key: str, value: str) -> bool:
     """يحفظ أو يحدّث قيمة إعداد في Supabase."""
     if not is_configured():
@@ -177,6 +196,87 @@ def set_config(key: str, value: str) -> bool:
         return r.status_code in (200, 201)
     except Exception:
         return False
+
+
+# ─── My Trades (دفتر الصفقات اليدوي) ─────────────────────────────────────────
+
+MY_TRADES_TABLE = "my_trades"
+
+def add_my_trade(trade: dict) -> bool:
+    """يضيف صفقة يدوية جديدة."""
+    if not is_configured():
+        return False
+    try:
+        r = requests.post(
+            f"{_url()}/rest/v1/{MY_TRADES_TABLE}",
+            headers=_headers(),
+            json=trade,
+            timeout=10,
+        )
+        return r.status_code in (200, 201)
+    except Exception as e:
+        print(f"  [db] add_my_trade: {e}")
+    return False
+
+
+def get_my_trades(limit: int = 500) -> List[Dict]:
+    """يجلب كل الصفقات اليدوية (أحدث أولاً)."""
+    if not is_configured():
+        return []
+    try:
+        r = requests.get(
+            f"{_url()}/rest/v1/{MY_TRADES_TABLE}"
+            f"?select=*&order=created_at.desc&limit={limit}",
+            headers=_headers(prefer=""),
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        print(f"  [db] get_my_trades: {e}")
+    return []
+
+
+def close_my_trade(trade_id: int, exit_price: float, pnl_dollar: float,
+                   pnl_pct: float, status: str) -> bool:
+    """يغلق صفقة يدوية."""
+    if not is_configured():
+        return False
+    try:
+        import datetime as _dt
+        payload = {
+            "exit_date":  _dt.date.today().isoformat(),
+            "exit_price": round(exit_price, 2),
+            "pnl_dollar": round(pnl_dollar, 2),
+            "pnl_pct":    round(pnl_pct, 2),
+            "status":     status,
+        }
+        r = requests.patch(
+            f"{_url()}/rest/v1/{MY_TRADES_TABLE}?id=eq.{trade_id}",
+            headers=_headers(prefer=""),
+            json=payload,
+            timeout=10,
+        )
+        return r.status_code in (200, 204)
+    except Exception as e:
+        print(f"  [db] close_my_trade: {e}")
+    return False
+
+
+def delete_my_trade(trade_id: int) -> bool:
+    """يحذف صفقة يدوية."""
+    if not is_configured():
+        return False
+    try:
+        r = requests.delete(
+            f"{_url()}/rest/v1/{MY_TRADES_TABLE}?id=eq.{trade_id}",
+            headers=_headers(prefer=""),
+            timeout=10,
+        )
+        return r.status_code in (200, 204)
+    except Exception as e:
+        print(f"  [db] delete_my_trade: {e}")
+    return False
 
 
 # ─── Read ─────────────────────────────────────────────────────────────────────
