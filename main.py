@@ -24,6 +24,24 @@ WATCHLIST_FILE = os.path.join(os.path.dirname(__file__), "watchlist.json")
 THRESHOLD_FILE = os.path.join(os.path.dirname(__file__), "asset_thresholds.json")
 
 last_signal: dict[str, datetime] = {}
+_min_score_cache: dict = {"ts": 0.0, "value": None}
+
+
+def _get_min_score() -> float:
+    """يجلب MIN_SCORE من Supabase (cache 5 دقائق)."""
+    import time as _t
+    now = _t.time()
+    if now - float(_min_score_cache["ts"]) < 300 and _min_score_cache["value"]:
+        return float(_min_score_cache["value"])
+    try:
+        val = db.get_config("min_score", "")
+        if val:
+            _min_score_cache["value"] = float(val)
+            _min_score_cache["ts"]    = now
+            return float(val)
+    except Exception:
+        pass
+    return config.MIN_SCORE
 
 
 # ─── Watchlist & Thresholds ───────────────────────────────────────────────────
@@ -411,7 +429,7 @@ def scan():
     signals: list = []
     with ThreadPoolExecutor(max_workers=5) as ex:
         futures = {
-            ex.submit(_analyze_one, sym, vix, thresholds.get(sym, config.MIN_SCORE)): sym
+            ex.submit(_analyze_one, sym, vix, thresholds.get(sym, _get_min_score())): sym
             for sym in watchlist
         }
         for future in as_completed(futures):

@@ -135,6 +135,50 @@ def update_outcome(
     return False
 
 
+# ─── Bot Config ───────────────────────────────────────────────────────────────
+
+CONFIG_TABLE = "bot_config"
+
+def get_config(key: str, default: str = "") -> str:
+    """يجلب قيمة إعداد من Supabase."""
+    if not is_configured():
+        return default
+    try:
+        r = requests.get(
+            f"{_url()}/rest/v1/{CONFIG_TABLE}?key=eq.{key}&select=value",
+            headers=_headers(prefer=""),
+            timeout=5,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            return str(data[0]["value"]) if data else default
+    except Exception:
+        pass
+    return default
+
+
+def set_config(key: str, value: str) -> bool:
+    """يحفظ أو يحدّث قيمة إعداد في Supabase."""
+    if not is_configured():
+        return False
+    try:
+        import datetime as _dt
+        payload = {
+            "key":        key,
+            "value":      str(value),
+            "updated_at": _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        r = requests.post(
+            f"{_url()}/rest/v1/{CONFIG_TABLE}",
+            headers=_headers(prefer="resolution=merge-duplicates"),
+            json=payload,
+            timeout=5,
+        )
+        return r.status_code in (200, 201)
+    except Exception:
+        return False
+
+
 # ─── Read ─────────────────────────────────────────────────────────────────────
 
 def get_open_signals() -> List[Dict]:

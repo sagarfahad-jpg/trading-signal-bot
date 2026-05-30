@@ -313,12 +313,22 @@ if "deep_sym" not in st.session_state:
 
 st.sidebar.title("⚙️ إعدادات العرض")
 if "min_score" not in st.session_state:
-    st.session_state["min_score"] = config.MIN_SCORE
+    _remote = db.get_config("min_score", str(config.MIN_SCORE))
+    try:
+        st.session_state["min_score"] = float(_remote)
+    except Exception:
+        st.session_state["min_score"] = config.MIN_SCORE
+
 min_score_ui = st.sidebar.slider(
     "حد الفرصة (Score)", 0.0, 15.0,
     st.session_state["min_score"], 0.5,
     key="min_score",
 )
+if st.sidebar.button("💾 حفظ للبوت", use_container_width=True):
+    if db.set_config("min_score", str(min_score_ui)):
+        st.sidebar.success(f"✅ تم الحفظ — البوت سيطبّق {min_score_ui} في المسح القادم")
+    else:
+        st.sidebar.error("❌ فشل الحفظ")
 
 current_wl  = load_watchlist()
 selected_sym = st.sidebar.selectbox("رسم بياني للأصل", current_wl)
