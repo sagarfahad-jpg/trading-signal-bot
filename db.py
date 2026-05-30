@@ -66,6 +66,8 @@ def save_signal(sig: "SignalResult") -> Optional[int]:
         "symbol":        sig.symbol,
         "direction":     sig.direction,
         "entry_price":   round((sig.entry_low + sig.entry_high) / 2, 2),
+        "entry_low":     round(sig.entry_low, 2),
+        "entry_high":    round(sig.entry_high, 2),
         "stop_price":    round(sig.stop, 2),
         "target1":       round(sig.target1, 2),
         "target2":       round(sig.target2, 2),
@@ -85,6 +87,8 @@ def save_signal(sig: "SignalResult") -> Optional[int]:
         "displacement":   sig.displacement,
         "smt_divergence": sig.smt_divergence,
         "smt_direction":  sig.smt_direction,
+        "is_manual":      False,
+        "entry_filled":   False,
         "status":         "open",
     }
 
@@ -104,6 +108,51 @@ def save_signal(sig: "SignalResult") -> Optional[int]:
     except Exception as e:
         print(f"  [db] save_signal error: {e}")
     return None
+
+
+def save_manual_signal(data: dict) -> Optional[int]:
+    """يحفظ إشارة يدوية (status=open, entry_filled=False, is_manual=True)."""
+    if not is_configured():
+        return None
+    payload = dict(data)
+    payload.setdefault("is_manual",    True)
+    payload.setdefault("entry_filled", False)
+    payload.setdefault("status",       "open")
+    try:
+        r = requests.post(
+            f"{_url()}/rest/v1/{TABLE}",
+            headers=_headers(),
+            json=payload,
+            timeout=10,
+        )
+        if r.status_code in (200, 201):
+            d = r.json()
+            return d[0]["id"] if d else None
+        print(f"  [db] save_manual_signal: {r.status_code} {r.text[:200]}")
+    except Exception as e:
+        print(f"  [db] save_manual_signal error: {e}")
+    return None
+
+
+def mark_entry_filled(signal_id: int) -> bool:
+    """يعلّم أن سعر الدخول قد تحقق."""
+    if not is_configured():
+        return False
+    try:
+        payload = {
+            "entry_filled": True,
+            "entry_time":   datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        r = requests.patch(
+            f"{_url()}/rest/v1/{TABLE}?id=eq.{signal_id}",
+            headers=_headers(prefer=""),
+            json=payload,
+            timeout=10,
+        )
+        return r.status_code in (200, 204)
+    except Exception as e:
+        print(f"  [db] mark_entry_filled: {e}")
+    return False
 
 
 def update_outcome(

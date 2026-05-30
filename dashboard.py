@@ -1506,6 +1506,58 @@ with tab6:
 
     st.divider()
 
+    # ── إشارة يدوية (تُرسل للتليجرام + يراقبها البوت) ──────────────────────────
+    with st.expander("📡 إرسال إشارة يدوية للبوت (مراقبة تلقائية)", expanded=False):
+        st.caption("شفت فرصة؟ أدخلها — تُرسل للتليجرام والبوت يراقبها: دخول → أهداف → خروج")
+        sf1, sf2, sf3 = st.columns(3)
+        _s_sym   = sf1.text_input("الأصل", "", key="ms_sym").upper().strip()
+        _s_dir   = sf2.selectbox("الاتجاه", ["call", "put"], key="ms_dir",
+                                 format_func=lambda x: "🟢 CALL" if x=="call" else "🔴 PUT")
+        _s_strike= sf3.number_input("Strike", min_value=0.0, step=0.5, key="ms_strike")
+
+        sf4, sf5, sf6 = st.columns(3)
+        _s_exp   = sf4.text_input("الانتهاء (YYYYMMDD)", "", key="ms_exp").strip()
+        _s_elo   = sf5.number_input("دخول من (السهم)", min_value=0.0, step=0.1, format="%.2f", key="ms_elo")
+        _s_ehi   = sf6.number_input("دخول إلى (السهم)", min_value=0.0, step=0.1, format="%.2f", key="ms_ehi")
+
+        sf7, sf8, sf9 = st.columns(3)
+        _s_stop  = sf7.number_input("الوقف (السهم)", min_value=0.0, step=0.1, format="%.2f", key="ms_stop")
+        _s_t1    = sf8.number_input("هدف ١ (السهم)", min_value=0.0, step=0.1, format="%.2f", key="ms_t1")
+        _s_t2    = sf9.number_input("هدف ٢ (السهم)", min_value=0.0, step=0.1, format="%.2f", key="ms_t2")
+
+        _s_opt   = st.number_input("سعر العقد التقريبي ($) — اختياري", min_value=0.0, step=0.05, format="%.2f", key="ms_opt")
+
+        if st.button("📡 إرسال ومراقبة", type="primary", key="ms_send"):
+            if _s_sym and _s_elo > 0 and _s_ehi > 0 and _s_stop > 0 and _s_t1 > 0:
+                _mid = round((_s_elo + _s_ehi) / 2, 2)
+                _payload = {
+                    "symbol":       _s_sym,
+                    "direction":    _s_dir,
+                    "entry_price":  _mid,
+                    "entry_low":    round(_s_elo, 2),
+                    "entry_high":   round(_s_ehi, 2),
+                    "stop_price":   round(_s_stop, 2),
+                    "target1":      round(_s_t1, 2),
+                    "target2":      round(_s_t2, 2) if _s_t2 else round(_s_t1, 2),
+                    "strike":       _s_strike or None,
+                    "expiry":       _s_exp or None,
+                    "option_price": round(_s_opt, 2) if _s_opt else 0,
+                    "entry_type":   "يدوي 📡",
+                    "score":        0,
+                    "rr":           round(abs(_s_t1 - _mid) / abs(_mid - _s_stop), 2) if _mid != _s_stop else 0,
+                    "confidence":   "manual",
+                }
+                _sid = db.save_manual_signal(_payload)
+                if _sid:
+                    st.cache_data.clear()
+                    st.success(f"✅ حُفظت إشارة {_s_sym} — البوت سيرسلها للتليجرام ويراقبها خلال لحظات")
+                else:
+                    st.error("❌ فشل الحفظ في Supabase")
+            else:
+                st.warning("أدخل: الأصل، منطقة الدخول، الوقف، وهدف ١")
+
+    st.divider()
+
     # ── إضافة صفقة جديدة ──────────────────────────────────────────────────────
     with st.expander("➕ إضافة صفقة جديدة", expanded=not my_trades):
         af1, af2, af3 = st.columns(3)

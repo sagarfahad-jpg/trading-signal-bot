@@ -67,6 +67,10 @@ def _check_one(sig: dict) -> None:
         print(f"  [tracker] ⏰ {symbol} منتهية ({age_hours:.0f}h)")
         return
 
+    # إشارة لم يتحقق دخولها بعد → لا نقيّم نتيجتها (price_monitor يتابعها)
+    if not sig.get("entry_filled"):
+        return
+
     # ── جلب بيانات السعر ─────────────────────────────────────────────────────
     try:
         df = dc.get_bars(symbol, "5m", "2d")

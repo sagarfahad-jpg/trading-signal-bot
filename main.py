@@ -120,10 +120,7 @@ def log_signal(signal: SignalResult, sent_ok: bool):
         "be_notified": False,
     })
     _write_log(log)
-
-    # ── تتبع لحظي ─────────────────────────────────────────────────────────────
-    if sent_ok:
-        price_monitor.add_signal(signal.symbol, log[-1])
+    # المراقبة الآن تُدار من Supabase عبر price_monitor (لا حاجة لإضافة يدوية)
 
 
 # ─── Outcome notifications ────────────────────────────────────────────────────
@@ -245,11 +242,12 @@ def _check_outcomes():
 
 
 def _outcome_loop():
+    # price_monitor (كل 45 ثانية) يدير دورة حياة الإشارات + تنبيهات Telegram.
+    # هذا اللوب يبقى كشبكة أمان للـ expiry فقط (كل 30 دقيقة).
     while True:
         time.sleep(30 * 60)
         try:
-            _check_outcomes()
-            outcome_tracker.check_outcomes()   # تحديث Supabase أيضاً
+            outcome_tracker.check_outcomes()   # expiry + safety net على Supabase
         except Exception:
             pass
 
@@ -574,7 +572,7 @@ def main():
     threading.Thread(target=_weekly_report_loop,  daemon=True).start()
     threading.Thread(target=_daily_summary_loop,  daemon=True).start()
     threading.Thread(target=_premarket_loop,      daemon=True).start()
-    price_monitor.start(_load_watchlist())
+    price_monitor.start()
     start_command_listener(scan_callback=scan)
 
     scan()
