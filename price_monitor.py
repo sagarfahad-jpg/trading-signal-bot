@@ -56,6 +56,17 @@ def _tick() -> None:
     """يفحص كل الإشارات المفتوحة (pending + active) + طلبات الخروج اليدوي."""
     signals = db.get_open_signals()          # status = 'open'
     exits   = db.get_exit_requests()         # status = 'exit_requested'
+    cancels = db.get_cancel_requests()       # status = 'cancel_requested'
+
+    # الإلغاء اليدوي لا يحتاج سعر — نفّذه فوراً
+    for c in cancels:
+        try:
+            db.update_outcome(c["id"], "cancelled", 0.0, 0.0)
+            _alert_cancelled(c)
+            _milestones.pop(c["id"], None)
+        except Exception as e:
+            print(f"  [monitor] cancel {c.get('symbol')}: {e}")
+
     signals = signals + exits
     if not signals:
         return
@@ -377,6 +388,19 @@ def _alert_manual_exit(sig, price, r):
         f"{'━'*26}\n"
         f"أُغلقت يدوياً عند: {price:.2f}\n"
         f"{r_emoji} النتيجة: {r_sign}{r:.2f}R\n"
+        f"{'━'*26}\n"
+        f"للمراقبة فقط — ليست توصية"
+    )
+    send(msg, config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
+
+
+def _alert_cancelled(sig):
+    info = _opt_info(sig)
+    msg = (
+        f"✖ أُلغيت إشارة — {sig['symbol']} | {_dir_ar(sig)}  {_tag(sig)}\n"
+        f"{'━'*26}\n"
+        + (f"{info}\n" if info else "")
+        + f"أُلغيت يدوياً قبل الدخول\n"
         f"{'━'*26}\n"
         f"للمراقبة فقط — ليست توصية"
     )

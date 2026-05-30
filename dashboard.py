@@ -1428,8 +1428,9 @@ with tab5:
             "hit_t2":       "✅✅ T2",
             "stopped":      "❌ Stop",
             "expired":      "⏰ منتهية",
-            "cancelled":    "✖ ملغاة",
-            "exit_requested":"🚪 خروج…",
+            "cancelled":      "✖ ملغاة",
+            "cancel_requested":"✖ إلغاء…",
+            "exit_requested": "🚪 خروج…",
             "manual_exit":  "🚪 خروج يدوي",
         }
         df_show = df_db.copy()
@@ -1537,6 +1538,7 @@ with tab6:
             if pc3.button("✖ إلغاء", key=f"cancel_{s['id']}"):
                 if db.cancel_signal(s["id"]):
                     st.cache_data.clear()
+                    st.success(f"✖ طُلب إلغاء {s['symbol']} — تنبيه للتليجرام خلال لحظات")
                     st.rerun()
         st.divider()
 

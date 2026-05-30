@@ -169,20 +169,37 @@ def get_exit_requests() -> List[Dict]:
 
 
 def cancel_signal(signal_id: int) -> bool:
-    """يلغي إشارة معلّقة (status=cancelled)."""
+    """يطلب إلغاء إشارة معلّقة (status=cancel_requested) — Railway يرسل التنبيه."""
     if not is_configured():
         return False
     try:
         r = requests.patch(
             f"{_url()}/rest/v1/{TABLE}?id=eq.{signal_id}",
             headers=_headers(prefer=""),
-            json={"status": "cancelled"},
+            json={"status": "cancel_requested"},
             timeout=10,
         )
         return r.status_code in (200, 204)
     except Exception as e:
         print(f"  [db] cancel_signal: {e}")
     return False
+
+
+def get_cancel_requests() -> List[Dict]:
+    """يجلب الإشارات المطلوب إلغاؤها يدوياً."""
+    if not is_configured():
+        return []
+    try:
+        r = requests.get(
+            f"{_url()}/rest/v1/{TABLE}?status=eq.cancel_requested&select=*",
+            headers=_headers(prefer=""),
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        print(f"  [db] get_cancel_requests: {e}")
+    return []
 
 
 def mark_entry_filled(signal_id: int) -> bool:
