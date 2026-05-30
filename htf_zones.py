@@ -115,8 +115,34 @@ def structure_bias(df: pd.DataFrame, lookback: int = 60) -> str:
 
 # ─── Zone Detection ───────────────────────────────────────────────────────────
 
+def _find_inversion_fvgs(df: pd.DataFrame) -> List[Tuple[float, float, str]]:
+    """
+    فجوات منقلبة (Inversion FVG) — فجوة اخترقها السعر وأغلق خلفها فانقلب دورها:
+      bearish FVG كُسرت للأعلى → تصبح منطقة طلب (demand / دعم)
+      bullish FVG كُسرت للأسفل → تصبح منطقة عرض (supply / مقاومة)
+    تُرجع (low, high, new_direction).
+    """
+    out: List[Tuple[float, float, str]] = []
+    closes = df['Close'].values
+    highs  = df['High'].values
+    lows   = df['Low'].values
+    n = len(df)
+    for i in range(2, n - 1):
+        c0_h, c0_l = float(highs[i - 2]), float(lows[i - 2])
+        c2_h, c2_l = float(highs[i]),     float(lows[i])
+        if c2_h < c0_l:                          # bearish FVG
+            band_lo, band_hi = c2_h, c0_l
+            if any(closes[j] > band_hi for j in range(i + 1, n)):
+                out.append((band_lo, band_hi, 'demand'))   # انقلبت لدعم
+        elif c2_l > c0_h:                        # bullish FVG
+            band_lo, band_hi = c0_h, c2_l
+            if any(closes[j] < band_lo for j in range(i + 1, n)):
+                out.append((band_lo, band_hi, 'supply'))    # انقلبت لمقاومة
+    return out[-6:]
+
+
 def _zones_from_df(df: pd.DataFrame, timeframe: str, strength: float) -> List[HTFZone]:
-    """يستخرج OBs و FVGs من DataFrame لفريم معيّن."""
+    """يستخرج OBs و FVGs و Inversion FVGs من DataFrame لفريم معيّن."""
     zones: List[HTFZone] = []
     if df.empty or len(df) < 20:
         return zones
@@ -137,6 +163,14 @@ def _zones_from_df(df: pd.DataFrame, timeframe: str, strength: float) -> List[HT
             low=round(lo, 4), high=round(hi, 4),
             zone_type='ob', direction=direction,
             timeframe=timeframe, strength=strength,
+        ))
+
+    # Inversion FVG — أقوى من الفجوة العادية (تطلّبت كسراً) → +0.5 قوة
+    for lo, hi, inv_dir in _find_inversion_fvgs(recent):
+        zones.append(HTFZone(
+            low=round(lo, 4), high=round(hi, 4),
+            zone_type='inv_fvg', direction=inv_dir,
+            timeframe=timeframe, strength=strength + 0.5,
         ))
 
     return zones
