@@ -21,12 +21,15 @@ import db
 import data_client as dc
 from telegram_bot import send
 
-POLL_SECONDS   = 45
-PCT_MILESTONES = [25, 50, 100]
+POLL_SECONDS        = 45
+PCT_MILESTONES      = [25, 50, 100]      # محطات الربح
+CONTRACT_LOSS_ALERTS = [-40, -60]        # تنبيه تآكل العقد (Theta)
+PENDING_MAX_HOURS   = 24                 # إشارة لم تدخل خلال هذه المدة → تُلغى
 
 # تتبّع المحطات المُرسلة لكل إشارة (في الذاكرة) — { signal_id: set(...) }
 _milestones: dict = {}
 _announced: set   = set()   # إشارات يدوية أُعلن عنها (لتفادي التكرار)
+_peak: dict       = {}      # أعلى/أدنى سعر بعد T1 للـ Trailing Stop
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────
@@ -94,6 +97,12 @@ def _check(sig: dict, price: float) -> None:
 
     # ── المرحلة 1: pending → انتظار الدخول ──────────────────────────────────
     if not filled:
+        # إلغاء تلقائي لو لم يتحقق الدخول خلال المدة المسموحة
+        if _age_hours(sig) > PENDING_MAX_HOURS:
+            db.update_outcome(sid, "cancelled", 0.0, 0.0)
+            _alert_pending_expired(sig)
+            _milestones.pop(sid, None)
+            return
         # تحقّق أن السعر لمس منطقة الدخول
         lo, hi = min(e_low, e_high), max(e_low, e_high)
         if lo <= price <= hi:
@@ -144,20 +153,48 @@ def _check(sig: dict, price: float) -> None:
         _milestones.pop(sid, None)
         return
 
-    # ── T1 (لا يُغلق — تنبيه فقط + تحريك الوقف، نكمل مراقبة T2) ──────────────
+    # ── T1 (لا يُغلق — تنبيه فقط + تفعيل Trailing Stop) ─────────────────────
     t1 = (direction == "call" and price >= target1) or \
          (direction == "put"  and price <= target1)
     if t1 and "T1" not in ms:
         ms.add("T1")
+        _peak[sid] = price            # نبدأ تتبّع القمة للـ Trailing
         _alert_t1(sig, price, contract_now, pct)
 
-    # ── محطات النسبة ─────────────────────────────────────────────────────────
+    # ── Trailing Stop (بعد T1 فقط) ──────────────────────────────────────────
+    if "T1" in ms:
+        trail_gap = abs(target1 - entry_px) * 0.5   # نصف المسافة دخول→هدف١
+        if direction == "call":
+            _peak[sid] = max(_peak.get(sid, price), price)
+            if price <= _peak[sid] - trail_gap and "trail" not in ms:
+                ms.add("trail")
+                _alert_exit(sig, price, contract_now, pct, "trail")
+                db.update_outcome(sid, "hit_t1", _peak[sid] - trail_gap, round(rr * 0.5, 3))
+                _milestones.pop(sid, None); _peak.pop(sid, None)
+                return
+        else:
+            _peak[sid] = min(_peak.get(sid, price), price)
+            if price >= _peak[sid] + trail_gap and "trail" not in ms:
+                ms.add("trail")
+                _alert_exit(sig, price, contract_now, pct, "trail")
+                db.update_outcome(sid, "hit_t1", _peak[sid] + trail_gap, round(rr * 0.5, 3))
+                _milestones.pop(sid, None); _peak.pop(sid, None)
+                return
+
+    # ── محطات الربح ──────────────────────────────────────────────────────────
     if opt_px:
         for thr in PCT_MILESTONES:
             key = f"pct_{thr}"
             if pct >= thr and key not in ms:
                 ms.add(key)
                 _alert_pct(sig, thr, contract_now, pct)
+
+        # ── تنبيه تآكل العقد (Theta) — وقف مبني على قيمة العقد ──────────────
+        for loss in CONTRACT_LOSS_ALERTS:
+            key = f"loss_{loss}"
+            if pct <= loss and key not in ms:
+                ms.add(key)
+                _alert_contract_decay(sig, contract_now, pct)
 
 
 # ─── Alerts ───────────────────────────────────────────────────────────────────
@@ -178,6 +215,16 @@ def _opt_info(sig: dict) -> str:
     if sig.get("expiry"):
         parts.append(str(sig["expiry"]))
     return " | ".join(parts)
+
+
+def _age_hours(sig: dict) -> float:
+    try:
+        import datetime as _dt
+        created = _dt.datetime.fromisoformat(
+            str(sig.get("created_at", "")).replace("Z", "+00:00"))
+        return (_dt.datetime.now(_dt.timezone.utc) - created).total_seconds() / 3600
+    except Exception:
+        return 0.0
 
 
 def _auto_log_trade(sig: dict, price: float) -> None:
@@ -278,6 +325,8 @@ def _alert_exit(sig, price, contract_now, pct, kind):
         header = f"✅✅ {sig['symbol']} | {_dir_ar(sig)} — الهدف الثاني! اخرج كلياً"
     elif kind == "stop_after_t1":
         header = f"🔒 {sig['symbol']} | {_dir_ar(sig)} — رجع للوقف بعد الهدف الأول (تعادل)"
+    elif kind == "trail":
+        header = f"🪤 {sig['symbol']} | {_dir_ar(sig)} — Trailing Stop (تأمين ربح بعد T1)"
     else:
         header = f"❌ {sig['symbol']} | {_dir_ar(sig)} — الوقف ضُرب"
     msg = (
@@ -285,5 +334,32 @@ def _alert_exit(sig, price, contract_now, pct, kind):
         f"السهم: {price:.2f}\n"
         + (f"العقد: ${opt:.2f} → ~${contract_now:.2f} ({_pct_str(pct)})\n" if opt else "")
         + f"{'━'*24}\nللمراقبة فقط — ليست توصية"
+    )
+    send(msg, config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
+
+
+def _alert_contract_decay(sig, contract_now, pct):
+    opt = float(sig.get("option_price") or 0)
+    msg = (
+        f"⚠️ تآكل العقد — {sig['symbol']} | {_dir_ar(sig)}  {_tag(sig)}\n"
+        f"{'━'*26}\n"
+        f"العقد فقد {_pct_str(pct)} من قيمته (السهم لم يضرب الوقف)\n"
+        + (f"الدخول: ${opt:.2f} → الآن: ~${contract_now:.2f}\n" if opt else "")
+        + f"💡 السبب غالباً Theta — فكّر بالخروج لتقليل الخسارة\n"
+        f"{'━'*26}\n"
+        f"للمراقبة فقط — ليست توصية"
+    )
+    send(msg, config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
+
+
+def _alert_pending_expired(sig):
+    info = _opt_info(sig)
+    msg = (
+        f"⌛ أُلغيت إشارة معلّقة — {sig['symbol']} | {_dir_ar(sig)}  {_tag(sig)}\n"
+        f"{'━'*26}\n"
+        + (f"{info}\n" if info else "")
+        + f"السعر لم يصل منطقة الدخول خلال {PENDING_MAX_HOURS} ساعة\n"
+        f"{'━'*26}\n"
+        f"للمراقبة فقط — ليست توصية"
     )
     send(msg, config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)

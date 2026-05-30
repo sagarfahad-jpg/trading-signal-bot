@@ -1506,6 +1506,32 @@ with tab6:
 
     st.divider()
 
+    # ── الإشارات المعلّقة (pending — تنتظر الدخول) ─────────────────────────────
+    try:
+        _pending = [s for s in db.get_open_signals() if not s.get("entry_filled")]
+    except Exception:
+        _pending = []
+    if _pending:
+        st.subheader(f"⏳ إشارات معلّقة ({len(_pending)})")
+        st.caption("تنتظر وصول السعر لمنطقة الدخول — تقدر تلغيها قبل الدخول")
+        for s in _pending:
+            pc1, pc2, pc3 = st.columns([4, 2, 1])
+            _tag = "📌 يدوية" if s.get("is_manual") else "🤖 بوت"
+            _de  = "🟢 CALL" if s.get("direction") == "call" else "🔴 PUT"
+            pc1.markdown(
+                f"**{s['symbol']}** {_de}  {_tag}  \n"
+                f"<span style='color:#888;font-size:.8rem;'>"
+                f"دخول: {float(s.get('entry_low') or 0):.2f}–{float(s.get('entry_high') or 0):.2f} | "
+                f"وقف: {float(s.get('stop_price') or 0):.2f} | هدف: {float(s.get('target1') or 0):.2f}</span>",
+                unsafe_allow_html=True,
+            )
+            pc2.caption(f"⏱ منذ {str(s.get('created_at',''))[:16].replace('T',' ')}")
+            if pc3.button("✖ إلغاء", key=f"cancel_{s['id']}"):
+                if db.cancel_signal(s["id"]):
+                    st.cache_data.clear()
+                    st.rerun()
+        st.divider()
+
     # ── إشارة يدوية (تُرسل للتليجرام + يراقبها البوت) ──────────────────────────
     with st.expander("📡 إرسال إشارة يدوية للبوت (مراقبة تلقائية)", expanded=False):
         st.caption("شفت فرصة؟ أدخلها — تُرسل للتليجرام والبوت يراقبها: دخول → أهداف → خروج")

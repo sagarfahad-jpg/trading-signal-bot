@@ -134,6 +134,23 @@ def save_manual_signal(data: dict) -> Optional[int]:
     return None
 
 
+def cancel_signal(signal_id: int) -> bool:
+    """يلغي إشارة معلّقة (status=cancelled)."""
+    if not is_configured():
+        return False
+    try:
+        r = requests.patch(
+            f"{_url()}/rest/v1/{TABLE}?id=eq.{signal_id}",
+            headers=_headers(prefer=""),
+            json={"status": "cancelled"},
+            timeout=10,
+        )
+        return r.status_code in (200, 204)
+    except Exception as e:
+        print(f"  [db] cancel_signal: {e}")
+    return False
+
+
 def mark_entry_filled(signal_id: int) -> bool:
     """يعلّم أن سعر الدخول قد تحقق."""
     if not is_configured():
