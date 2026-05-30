@@ -99,6 +99,9 @@ def _check(sig: dict, price: float) -> None:
         if lo <= price <= hi:
             db.mark_entry_filled(sid)
             _alert_entry(sig, price)
+            # الإشارات اليدوية → تُسجَّل تلقائياً في "صفقاتي" كمفتوحة
+            if sig.get("is_manual"):
+                _auto_log_trade(sig, price)
         return   # لا نراقب الأهداف قبل تحقق الدخول
 
     # ── المرحلة 2: active → مراقبة الأهداف ──────────────────────────────────
@@ -177,6 +180,39 @@ def _opt_info(sig: dict) -> str:
     return " | ".join(parts)
 
 
+def _auto_log_trade(sig: dict, price: float) -> None:
+    """يسجّل الإشارة اليدوية في دفتر 'صفقاتي' كصفقة مفتوحة عند تحقق الدخول."""
+    try:
+        import datetime as _dt
+        opt = float(sig.get("option_price") or 0)
+        # عدد العقود من رأس المال (1% مخاطرة) إن توفّر سعر العقد
+        contracts = 1
+        if opt > 0:
+            try:
+                acct = db.get_account_size(config.ACCOUNT_SIZE)
+                contracts = max(1, int(acct * config.RISK_PCT / (opt * 100)))
+            except Exception:
+                contracts = 1
+        note_bits = []
+        if sig.get("strike"): note_bits.append(f"Strike {sig['strike']}")
+        if sig.get("expiry"): note_bits.append(str(sig["expiry"]))
+        note_bits.append(f"دخول السهم ~{price:.2f}")
+        db.add_my_trade({
+            "entry_date":   _dt.date.today().isoformat(),
+            "symbol":       sig["symbol"],
+            "side":         "CALL" if sig.get("direction") == "call" else "PUT",
+            "entry_price":  round(opt, 2),          # سعر العقد (Premium)
+            "contracts":    contracts,
+            "stop_price":   float(sig.get("stop_price") or 0),
+            "target_price": float(sig.get("target1") or 0),
+            "from_signal":  False,                  # اختيارك الشخصي
+            "status":       "OPEN",
+            "notes":        "auto من إشارة يدوية — " + " | ".join(note_bits),
+        })
+    except Exception as e:
+        print(f"  [monitor] auto_log_trade: {e}")
+
+
 def _alert_manual_new(sig: dict) -> None:
     info = _opt_info(sig)
     e_low  = float(sig.get("entry_low")  or 0)
@@ -204,7 +240,8 @@ def _alert_entry(sig: dict, price: float) -> None:
         + f"السعر وصل منطقة الدخول: {price:.2f}\n"
         f"🛑 الوقف: {float(sig.get('stop_price') or 0):.2f}\n"
         f"🎯 هدف ١: {float(sig.get('target1') or 0):.2f}  |  هدف ٢: {float(sig.get('target2') or 0):.2f}\n"
-        f"{'━'*26}\n"
+        + ("📒 سُجّلت في «صفقاتي» — أغلقها بسعرك الفعلي عند الخروج\n" if sig.get("is_manual") else "")
+        + f"{'━'*26}\n"
         f"للمراقبة فقط — ليست توصية"
     )
     send(msg, config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
