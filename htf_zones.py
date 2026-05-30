@@ -274,6 +274,51 @@ def displacement_5m(df: pd.DataFrame, direction: str, atr: float) -> bool:
         return c < o and close_pos <= 0.30 and body_ratio >= 0.60
 
 
+def inversion_fvg_confirms_zone(df5m: pd.DataFrame, zone: HTFZone, direction: str) -> bool:
+    """
+    Inversion FVG داخل منطقة HTF — تأكيد قوي (مثل Breaker لكن على الفجوات):
+
+    Call : فجوة هابطة (bearish FVG) اخترقها السعر للأعلى وأغلق فوقها
+           → تحوّلت من مقاومة إلى دعم، والسعر يعيد اختبارها داخل المنطقة.
+    Put  : فجوة صاعدة (bullish FVG) اخترقها السعر للأسفل وأغلق تحتها
+           → تحوّلت من دعم إلى مقاومة.
+
+    الشرط الإضافي: الفجوة المنقلبة تتقاطع مع منطقة الـ HTF (Confluence).
+    """
+    window = df5m.tail(40)
+    n = len(window)
+    if n < 6:
+        return False
+
+    closes = window['Close'].values
+    highs  = window['High'].values
+    lows   = window['Low'].values
+
+    for i in range(2, n - 1):
+        c0_h, c0_l = float(highs[i - 2]), float(lows[i - 2])
+        c2_h, c2_l = float(highs[i]),     float(lows[i])
+
+        # فجوة هابطة (bearish FVG): band = (c2_h, c0_l)
+        if c2_h < c0_l:
+            band_lo, band_hi = c2_h, c0_l
+            # هل أغلق السعر لاحقاً فوق الفجوة؟ (انقلاب صعودي)
+            broke_up = any(closes[j] > band_hi for j in range(i + 1, n))
+            if direction == 'call' and broke_up:
+                if band_lo <= zone.high and band_hi >= zone.low:
+                    return True
+
+        # فجوة صاعدة (bullish FVG): band = (c0_h, c2_l)
+        elif c2_l > c0_h:
+            band_lo, band_hi = c0_h, c2_l
+            # هل أغلق السعر لاحقاً تحت الفجوة؟ (انقلاب هبوطي)
+            broke_dn = any(closes[j] < band_lo for j in range(i + 1, n))
+            if direction == 'put' and broke_dn:
+                if band_lo <= zone.high and band_hi >= zone.low:
+                    return True
+
+    return False
+
+
 def fvg_confirms_zone(df5m: pd.DataFrame, zone: HTFZone, direction: str) -> bool:
     """
     يتحقق من وجود FVG على الـ 5m داخل منطقة HTF يدعم الاتجاه.

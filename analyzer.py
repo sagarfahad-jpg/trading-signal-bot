@@ -715,7 +715,8 @@ def analyze(
 
         # ── HTF Zone Analysis ─────────────────────────────────────────────────
         from htf_zones import (get_htf_analysis, price_in_zone, nearest_zone,
-                                cisd_5m, displacement_5m, fvg_confirms_zone)
+                                cisd_5m, displacement_5m, fvg_confirms_zone,
+                                inversion_fvg_confirms_zone)
 
         htf          = get_htf_analysis(symbol, df1h, df4h, df1d)
         _direction_p = 'call' if bs >= ps else 'put'  # الاتجاه المؤقت للبحث عن المنطقة
@@ -745,10 +746,12 @@ def analyze(
                 # تأكيدات الـ 5m
                 bull_c, bear_c = cisd_5m(df5)
                 is_cisd     = (_direction_p == 'call' and bull_c) or (_direction_p == 'put' and bear_c)
+                is_inv_fvg  = inversion_fvg_confirms_zone(df5, active_zone, _direction_p)
                 is_displace = displacement_5m(df5, _direction_p, atr)
                 fvg_conf    = fvg_confirms_zone(df5, active_zone, _direction_p)
 
-                if   is_cisd:     confirm_bonus = 4.0   # الأقوى
+                if   is_cisd:     confirm_bonus = 4.0   # الأقوى — تحوّل هيكلي
+                elif is_inv_fvg:  confirm_bonus = 3.5   # فجوة منقلبة داخل المنطقة
                 elif is_displace: confirm_bonus = 3.0
                 elif fvg_conf:    confirm_bonus = 2.5
                 else:             confirm_bonus = 1.0   # في المنطقة، انتظار تأكيد
