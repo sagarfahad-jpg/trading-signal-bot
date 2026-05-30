@@ -409,9 +409,60 @@ def _analyze_one(symbol: str, vix: float, sym_min: float):
         return symbol, None
 
 
+_daily_loss_halted_date: str = ""   # تاريخ آخر يوم أُوقف فيه بسبب الخسارة
+
+def _today_realized_r() -> float:
+    """يحسب إجمالي R المحقَّق اليوم من Supabase."""
+    if not db.is_configured():
+        return 0.0
+    try:
+        et    = pytz.timezone(config.TIMEZONE)
+        today = datetime.now(et).strftime("%Y-%m-%d")
+        total = 0.0
+        for s in db.get_all_signals(limit=300):
+            if str(s.get("outcome_time") or s.get("created_at",""))[:10] != today:
+                continue
+            if s.get("status") in ("hit_t1", "hit_t2", "stopped", "manual_exit"):
+                total += float(s.get("r_multiple") or 0)
+        return round(total, 2)
+    except Exception:
+        return 0.0
+
+
+def _daily_loss_limit() -> float:
+    """حد الخسارة اليومي (سالب) — من Supabase أو -3R افتراضياً."""
+    try:
+        v = db.get_config("max_daily_loss_r", "-3.0")
+        return float(v)
+    except Exception:
+        return -3.0
+
+
 def scan():
+    global _daily_loss_halted_date
     if not is_market_open():
         print(f"[{datetime.now().strftime('%H:%M')}] السوق مغلق.")
+        return
+
+    # ── حماية رأس المال: حد الخسارة اليومي ────────────────────────────────────
+    et        = pytz.timezone(config.TIMEZONE)
+    today_str = datetime.now(et).strftime("%Y-%m-%d")
+    day_r     = _today_realized_r()
+    limit_r   = _daily_loss_limit()
+    if day_r <= limit_r:
+        if _daily_loss_halted_date != today_str:
+            _daily_loss_halted_date = today_str
+            msg = (
+                f"🛑 توقّف الإرسال — حد الخسارة اليومي\n"
+                f"{'━'*26}\n"
+                f"خسارة اليوم: {day_r}R (الحد: {limit_r}R)\n"
+                f"استراحة حتى الغد — تجنّب مطاردة الخسارة\n"
+                f"{'━'*26}"
+            )
+            send(msg, config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
+            print(f"🛑 توقف — خسارة اليوم {day_r}R بلغت الحد {limit_r}R")
+        else:
+            print(f"[{datetime.now().strftime('%H:%M')}] متوقف — حد الخسارة اليومي ({day_r}R).")
         return
 
     vix        = get_vix()

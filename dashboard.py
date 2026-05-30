@@ -350,6 +350,26 @@ if st.sidebar.button("💾 حفظ رأس المال", use_container_width=True):
     else:
         st.sidebar.error("❌ فشل الحفظ")
 
+# ── حد الخسارة اليومي ─────────────────────────────────────────────────────────
+if "max_daily_loss" not in st.session_state:
+    _dl = db.get_config("max_daily_loss_r", "-3.0")
+    try:
+        st.session_state["max_daily_loss"] = float(_dl)
+    except Exception:
+        st.session_state["max_daily_loss"] = -3.0
+
+daily_loss_ui = st.sidebar.slider(
+    "🛑 حد الخسارة اليومي (R)", -10.0, -1.0,
+    st.session_state["max_daily_loss"], 0.5,
+    key="max_daily_loss",
+    help="يتوقف البوت عن الإرسال لبقية اليوم عند بلوغ هذه الخسارة",
+)
+if st.sidebar.button("💾 حفظ حد الخسارة", use_container_width=True):
+    if db.set_config("max_daily_loss_r", str(daily_loss_ui)):
+        st.sidebar.success(f"✅ تم الحفظ — يتوقف عند {daily_loss_ui}R")
+    else:
+        st.sidebar.error("❌ فشل الحفظ")
+
 current_wl  = load_watchlist()
 selected_sym = st.sidebar.selectbox("رسم بياني للأصل", current_wl)
 show_levels  = st.sidebar.checkbox("عرض مستويات الإشارة على الرسم", value=True)
