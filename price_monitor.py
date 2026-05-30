@@ -53,8 +53,10 @@ def _loop() -> None:
 
 
 def _tick() -> None:
-    """يفحص كل الإشارات المفتوحة (pending + active)."""
-    signals = db.get_open_signals()        # status = 'open'
+    """يفحص كل الإشارات المفتوحة (pending + active) + طلبات الخروج اليدوي."""
+    signals = db.get_open_signals()          # status = 'open'
+    exits   = db.get_exit_requests()         # status = 'exit_requested'
+    signals = signals + exits
     if not signals:
         return
 
@@ -87,6 +89,21 @@ def _check(sig: dict, price: float) -> None:
     filled    = bool(sig.get("entry_filled"))
     e_low     = float(sig.get("entry_low")  or sig.get("entry_price") or 0)
     e_high    = float(sig.get("entry_high") or sig.get("entry_price") or 0)
+
+    # ── خروج يدوي فوري (طلب من Dashboard) ────────────────────────────────────
+    if sig.get("status") == "exit_requested":
+        entry_px = float(sig.get("entry_price") or (e_low + e_high) / 2)
+        stop_px  = float(sig.get("stop_price") or 0)
+        if direction == "call" and entry_px > stop_px:
+            r = (price - entry_px) / (entry_px - stop_px)
+        elif direction == "put" and stop_px > entry_px:
+            r = (entry_px - price) / (stop_px - entry_px)
+        else:
+            r = 0.0
+        _alert_manual_exit(sig, price, r)
+        db.update_outcome(sid, "manual_exit", price, round(r, 3))
+        _milestones.pop(sid, None); _peak.pop(sid, None)
+        return
 
     ms = _milestones.setdefault(sid, set())
 
@@ -346,6 +363,20 @@ def _alert_contract_decay(sig, contract_now, pct):
         f"العقد فقد {_pct_str(pct)} من قيمته (السهم لم يضرب الوقف)\n"
         + (f"الدخول: ${opt:.2f} → الآن: ~${contract_now:.2f}\n" if opt else "")
         + f"💡 السبب غالباً Theta — فكّر بالخروج لتقليل الخسارة\n"
+        f"{'━'*26}\n"
+        f"للمراقبة فقط — ليست توصية"
+    )
+    send(msg, config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
+
+
+def _alert_manual_exit(sig, price, r):
+    r_sign = "+" if r >= 0 else ""
+    r_emoji = "✅" if r >= 0 else "❌"
+    msg = (
+        f"🚪 خروج فوري — {sig['symbol']} | {_dir_ar(sig)}  {_tag(sig)}\n"
+        f"{'━'*26}\n"
+        f"أُغلقت يدوياً عند: {price:.2f}\n"
+        f"{r_emoji} النتيجة: {r_sign}{r:.2f}R\n"
         f"{'━'*26}\n"
         f"للمراقبة فقط — ليست توصية"
     )

@@ -1154,13 +1154,18 @@ with tab5:
                 df_db[col] = pd.to_numeric(df_db[col], errors="coerce")
 
         # ── فئات النتائج ─────────────────────────────────────────────────────
-        decided = df_db[df_db["status"].isin(["hit_t1","hit_t2","stopped"])].copy()
+        decided = df_db[df_db["status"].isin(["hit_t1","hit_t2","stopped","manual_exit"])].copy()
         open_cnt    = int((df_db["status"] == "open").sum())
         wins_t2     = int((df_db["status"] == "hit_t2").sum())
         wins_t1     = int((df_db["status"] == "hit_t1").sum())
-        losses      = int((df_db["status"] == "stopped").sum())
-        total_dec   = wins_t2 + wins_t1 + losses
-        win_rate_db = round((wins_t2 + wins_t1) / total_dec * 100) if total_dec > 0 else 0
+        # خروج يدوي: فوز لو R≥0 وإلا خسارة
+        _me = df_db[df_db["status"] == "manual_exit"]
+        _me_win  = int((_me["r_multiple"] >= 0).sum()) if not _me.empty else 0
+        _me_loss = int((_me["r_multiple"] <  0).sum()) if not _me.empty else 0
+        losses      = int((df_db["status"] == "stopped").sum()) + _me_loss
+        total_wins  = wins_t2 + wins_t1 + _me_win
+        total_dec   = total_wins + losses
+        win_rate_db = round(total_wins / total_dec * 100) if total_dec > 0 else 0
 
         # متوسط R
         avg_r  = round(float(decided["r_multiple"].mean()), 2) if not decided.empty else 0.0
@@ -1170,7 +1175,7 @@ with tab5:
         p1, p2, p3, p4, p5 = st.columns(5)
         p1.metric("📤 إجمالي الإشارات", len(df_db))
         p2.metric("🏆 Win Rate",  f"{win_rate_db}%",
-                  delta=f"{wins_t1+wins_t2} فوز")
+                  delta=f"{total_wins} فوز")
         p3.metric("❌ خسارة", losses)
         p4.metric("📂 مفتوحة", open_cnt)
         clr = "#00c853" if total_r >= 0 else "#ff1744"
@@ -1418,11 +1423,14 @@ with tab5:
         st.subheader("📋 آخر الإشارات")
 
         _status_ar = {
-            "open":    "🔵 مفتوحة",
-            "hit_t1":  "✅ T1",
-            "hit_t2":  "✅✅ T2",
-            "stopped": "❌ Stop",
-            "expired": "⏰ منتهية",
+            "open":         "🔵 مفتوحة",
+            "hit_t1":       "✅ T1",
+            "hit_t2":       "✅✅ T2",
+            "stopped":      "❌ Stop",
+            "expired":      "⏰ منتهية",
+            "cancelled":    "✖ ملغاة",
+            "exit_requested":"🚪 خروج…",
+            "manual_exit":  "🚪 خروج يدوي",
         }
         df_show = df_db.copy()
         df_show["النتيجة"]   = df_show["status"].map(_status_ar).fillna(df_show["status"])
@@ -1529,6 +1537,34 @@ with tab6:
             if pc3.button("✖ إلغاء", key=f"cancel_{s['id']}"):
                 if db.cancel_signal(s["id"]):
                     st.cache_data.clear()
+                    st.rerun()
+        st.divider()
+
+    # ── الإشارات النشطة (دخلت — يمكن الخروج الفوري) ────────────────────────────
+    try:
+        _active_sigs = [s for s in db.get_open_signals() if s.get("entry_filled")]
+    except Exception:
+        _active_sigs = []
+    if _active_sigs:
+        st.subheader(f"📈 إشارات نشطة ({len(_active_sigs)})")
+        st.caption("دخلت ولم تُغلق بعد — اخرج فوراً لو شفت انعكاس أو خبر")
+        for s in _active_sigs:
+            ac1, ac2, ac3 = st.columns([4, 2, 1])
+            _tag = "📌 يدوية" if s.get("is_manual") else "🤖 بوت"
+            _de  = "🟢 CALL" if s.get("direction") == "call" else "🔴 PUT"
+            ac1.markdown(
+                f"**{s['symbol']}** {_de}  {_tag}  \n"
+                f"<span style='color:#888;font-size:.8rem;'>"
+                f"دخول: {float(s.get('entry_price') or 0):.2f} | "
+                f"وقف: {float(s.get('stop_price') or 0):.2f} | "
+                f"هدف: {float(s.get('target1') or 0):.2f}</span>",
+                unsafe_allow_html=True,
+            )
+            ac2.caption(f"⏱ {str(s.get('entry_time') or s.get('created_at',''))[:16].replace('T',' ')}")
+            if ac3.button("🚪 خروج فوري", key=f"exit_{s['id']}"):
+                if db.request_exit(s["id"]):
+                    st.cache_data.clear()
+                    st.success(f"🚪 طُلب الخروج من {s['symbol']} — البوت ينفّذه خلال لحظات")
                     st.rerun()
         st.divider()
 

@@ -134,6 +134,40 @@ def save_manual_signal(data: dict) -> Optional[int]:
     return None
 
 
+def request_exit(signal_id: int) -> bool:
+    """يطلب خروجاً يدوياً فورياً (status=exit_requested) — Railway ينفّذه."""
+    if not is_configured():
+        return False
+    try:
+        r = requests.patch(
+            f"{_url()}/rest/v1/{TABLE}?id=eq.{signal_id}",
+            headers=_headers(prefer=""),
+            json={"status": "exit_requested"},
+            timeout=10,
+        )
+        return r.status_code in (200, 204)
+    except Exception as e:
+        print(f"  [db] request_exit: {e}")
+    return False
+
+
+def get_exit_requests() -> List[Dict]:
+    """يجلب الإشارات المطلوب الخروج منها يدوياً."""
+    if not is_configured():
+        return []
+    try:
+        r = requests.get(
+            f"{_url()}/rest/v1/{TABLE}?status=eq.exit_requested&select=*",
+            headers=_headers(prefer=""),
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        print(f"  [db] get_exit_requests: {e}")
+    return []
+
+
 def cancel_signal(signal_id: int) -> bool:
     """يلغي إشارة معلّقة (status=cancelled)."""
     if not is_configured():
