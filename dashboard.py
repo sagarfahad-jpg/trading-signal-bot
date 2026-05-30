@@ -1229,11 +1229,45 @@ with tab5:
                 hoverinfo="text+y",
             ))
             fig_eq.add_hline(y=0, line_dash="dash", line_color="#555", opacity=0.8)
+
+            # ── خط SPY المرجعي (Benchmark) ─────────────────────────────────────
+            spy_note = ""
+            try:
+                _dates = pd.to_datetime(df_eq["outcome_time"], errors="coerce").dropna()
+                if len(_dates) >= 2:
+                    _start = _dates.min().strftime("%Y-%m-%d")
+                    _spy = yf.Ticker("SPY").history(start=_start, interval="1d")
+                    if not _spy.empty:
+                        _spy_first = float(_spy["Close"].iloc[0])
+                        # عائد SPY التراكمي % عند تاريخ كل إشارة (1R = 1% مع مخاطرة 1%)
+                        _spy_r = []
+                        for _, _row in df_eq.iterrows():
+                            _t = pd.to_datetime(_row["outcome_time"], errors="coerce")
+                            try:
+                                _sub = _spy[_spy.index <= _t.tz_localize(_spy.index.tz) if _t.tzinfo is None else _t]
+                                _px  = float(_sub["Close"].iloc[-1]) if not _sub.empty else _spy_first
+                            except Exception:
+                                _px = _spy_first
+                            _spy_r.append((_px - _spy_first) / _spy_first * 100)
+                        fig_eq.add_trace(go.Scatter(
+                            x=list(range(1, len(df_eq) + 1)),
+                            y=_spy_r,
+                            mode="lines",
+                            name="SPY (شراء وانتظار)",
+                            line=dict(color="#888", width=1.5, dash="dot"),
+                            hoverinfo="y",
+                        ))
+                        _spy_total = round(_spy_r[-1], 2)
+                        _verdict = "🟢 البوت متفوّق" if total_r > _spy_total else "🔴 SPY أفضل"
+                        spy_note = f"  |  SPY: {_spy_total:+.1f}%  {_verdict}"
+            except Exception:
+                pass
+
             fig_eq.update_layout(
                 title=dict(
                     text=f"الأداء التراكمي: <b style='color:{total_clr};'>"
                          f"{'+' if total_r>=0 else ''}{total_r}R</b>"
-                         f"  ({total_dec} إشارة محسومة)",
+                         f"  ({total_dec} إشارة محسومة){spy_note}",
                     font=dict(color="white", size=14),
                 ),
                 paper_bgcolor="#0f0f1a", plot_bgcolor="#0f0f1a",
@@ -1241,11 +1275,13 @@ with tab5:
                 xaxis=dict(gridcolor="#1e1e2e",
                            title=dict(text="رقم الإشارة", font=dict(color="#aaa"))),
                 yaxis=dict(gridcolor="#1e1e2e",
-                           title=dict(text="R Multiples", font=dict(color="#aaa"))),
+                           title=dict(text="R Multiples / %", font=dict(color="#aaa"))),
                 margin=dict(l=10, r=10, t=50, b=10),
-                showlegend=False,
+                showlegend=True,
+                legend=dict(font=dict(color="#aaa", size=10), x=0.02, y=0.98),
             )
             st.plotly_chart(fig_eq, use_container_width=True)
+            st.caption("ℹ️ المقارنة تقريبية: 1R ≈ 1% (مخاطرة 1%). الخط الرمادي = عائد SPY لو اشتريته وانتظرت.")
             st.divider()
 
         # ── Breakdown Charts ──────────────────────────────────────────────────

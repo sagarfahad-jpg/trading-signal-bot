@@ -528,6 +528,28 @@ def scan():
 
 _premarket_sent_date: str = ""   # تتبع تاريخ آخر مسح أُرسل
 
+def _detect_gaps(watchlist: list, min_pct: float = 1.5) -> list:
+    """يكشف الفجوات: فرق سعر اليوم عن إغلاق أمس ≥ min_pct%."""
+    import yfinance as yf
+    gaps = []
+    for sym in watchlist:
+        try:
+            df = yf.Ticker(sym).history(period="2d", interval="1d")
+            if len(df) < 2:
+                continue
+            prev_close = float(df["Close"].iloc[-2])
+            today_open = float(df["Open"].iloc[-1])
+            if prev_close <= 0:
+                continue
+            pct = (today_open - prev_close) / prev_close * 100
+            if abs(pct) >= min_pct:
+                gaps.append({"symbol": sym, "pct": round(pct, 1)})
+        except Exception:
+            pass
+    gaps.sort(key=lambda x: abs(x["pct"]), reverse=True)
+    return gaps
+
+
 def _run_premarket_scan():
     """يفحص جميع الأصول ويرسل ملخص أقوى الفرص قبل افتتاح السوق."""
     global _premarket_sent_date
@@ -572,6 +594,15 @@ def _run_premarket_scan():
         rsi     = round(r.get("rsi", 0), 1)
         conf_emoji = "⭐" if score >= config.HIGH_CONFIDENCE_THRESHOLD else ""
         lines.append(f"  {r['symbol']:<6} {d_ar}  |  تقييم: {score}  |  RSI: {rsi} {conf_emoji}")
+
+    # ── كشف الفجوات السعرية (Gap) ──────────────────────────────────────────
+    gaps = _detect_gaps(watchlist)
+    if gaps:
+        lines.append("")
+        lines.append("⚡ فجوات سعرية (تقلب عالٍ اليوم):")
+        for g in gaps:
+            arrow = "🟢▲" if g["pct"] > 0 else "🔴▼"
+            lines.append(f"  {g['symbol']:<6} {arrow} {g['pct']:+.1f}%")
 
     # تحذيرات الإيرادات
     from analyzer import has_earnings_soon

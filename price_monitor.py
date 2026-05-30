@@ -370,11 +370,19 @@ def _alert_pct(sig, threshold, contract_now, pct):
 def _alert_t1(sig, price, contract_now, pct):
     opt = float(sig.get("option_price") or 0)
     entry_p = float(sig.get("entry_price") or 0)
+    qty     = int(sig.get("contracts") or 0)
+    # خروج جزئي (Scale-out): نصف العقود الآن
+    if qty >= 2:
+        half = qty // 2
+        scale_line = f"💰 اخرج {half} عقد الآن (نصف المركز) — ثبّت ربح\n🎯 اترك {qty - half} عقد لـ T2\n"
+    else:
+        scale_line = "💰 فكّر بجني نصف الربح هنا\n"
     msg = (
         f"✅ {sig['symbol']} | {_dir_ar(sig)} — الهدف الأول!  {_tag(sig)}\n"
         f"السهم وصل: {price:.2f}\n"
         + (f"العقد: ${opt:.2f} → ~${contract_now:.2f} ({_pct_str(pct)})\n" if opt else "")
-        + f"\n🔒 حرّك الوقف لنقطة التعادل ({entry_p:.2f})\n"
+        + f"\n{scale_line}"
+        f"🔒 حرّك وقف الباقي لنقطة التعادل ({entry_p:.2f})\n"
         f"🎯 الهدف الثاني: {float(sig.get('target2') or 0):.2f}\n"
         f"{'━'*24}\nللمراقبة فقط — ليست توصية"
     )
