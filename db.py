@@ -202,8 +202,8 @@ def get_cancel_requests() -> List[Dict]:
     return []
 
 
-def mark_entry_filled(signal_id: int) -> bool:
-    """يعلّم أن سعر الدخول قد تحقق."""
+def mark_entry_filled(signal_id: int, fill_price: float = 0.0) -> bool:
+    """يعلّم أن سعر الدخول قد تحقق ويسجّل سعر اللمسة الفعلي."""
     if not is_configured():
         return False
     try:
@@ -211,6 +211,8 @@ def mark_entry_filled(signal_id: int) -> bool:
             "entry_filled": True,
             "entry_time":   datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
+        if fill_price > 0:
+            payload["entry_fill_price"] = round(fill_price, 2)
         r = requests.patch(
             f"{_url()}/rest/v1/{TABLE}?id=eq.{signal_id}",
             headers=_headers(prefer=""),
@@ -232,6 +234,8 @@ def update_outcome(
     duration_min: Optional[int] = None,
     max_favorable: Optional[float] = None,
     max_adverse: Optional[float] = None,
+    lowest_price: Optional[float] = None,
+    highest_price: Optional[float] = None,
 ) -> bool:
     """يحدّث نتيجة إشارة موجودة مع تفاصيل سلامة البيانات."""
     if not is_configured():
@@ -251,6 +255,10 @@ def update_outcome(
         payload["max_favorable"] = round(max_favorable, 3)
     if max_adverse is not None:
         payload["max_adverse"] = round(max_adverse, 3)
+    if lowest_price is not None:
+        payload["lowest_price"] = round(lowest_price, 2)
+    if highest_price is not None:
+        payload["highest_price"] = round(highest_price, 2)
     try:
         r = requests.patch(
             f"{_url()}/rest/v1/{TABLE}?id=eq.{signal_id}",
