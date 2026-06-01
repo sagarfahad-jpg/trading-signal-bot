@@ -953,6 +953,16 @@ def analyze(
         expiry, strike, option_price, delta, iv, theta = _get_contract(
             symbol, direction, price, is_scalp=is_scalp, score=score)
 
+        # ── سقف تكلفة العقد (تكلفة العقد = Premium × 100) ──────────────────────
+        try:
+            import db as _db
+            _max_cost = float(_db.get_config("max_contract_cost", "0") or 0)
+        except Exception:
+            _max_cost = 0.0
+        if _max_cost > 0 and option_price > 0 and (option_price * 100) > _max_cost:
+            print(f"  [analyzer] {symbol}: رُفضت — العقد ${option_price*100:.0f} > سقف ${_max_cost:.0f}")
+            return None
+
         # ── Position Sizing ───────────────────────────────────────────────────
         import config as _cfg
         try:

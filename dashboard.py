@@ -370,6 +370,26 @@ if st.sidebar.button("💾 حفظ حد الخسارة", use_container_width=True
     else:
         st.sidebar.error("❌ فشل الحفظ")
 
+# ── سقف تكلفة العقد ────────────────────────────────────────────────────────────
+if "max_contract_cost" not in st.session_state:
+    _mcc = db.get_config("max_contract_cost", "0")
+    try:
+        st.session_state["max_contract_cost"] = float(_mcc)
+    except Exception:
+        st.session_state["max_contract_cost"] = 0.0
+max_cost_ui = st.sidebar.number_input(
+    "💵 سقف تكلفة العقد ($)", min_value=0.0, max_value=20000.0,
+    value=st.session_state["max_contract_cost"], step=50.0,
+    key="max_contract_cost",
+    help="يرفض أي إشارة عقدها أغلى من هذا المبلغ (0 = بلا سقف). التكلفة = Premium × 100",
+)
+if st.sidebar.button("💾 حفظ سقف العقد", use_container_width=True):
+    if db.set_config("max_contract_cost", str(max_cost_ui)):
+        _lbl = "بلا سقف" if max_cost_ui == 0 else f"${max_cost_ui:.0f}"
+        st.sidebar.success(f"✅ تم الحفظ — السقف {_lbl}")
+    else:
+        st.sidebar.error("❌ فشل الحفظ")
+
 # ── زر إيقاف/تشغيل البوت ───────────────────────────────────────────────────────
 st.sidebar.divider()
 _paused = db.get_config("bot_paused", "0") == "1"
