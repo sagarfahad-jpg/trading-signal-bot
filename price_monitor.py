@@ -348,7 +348,8 @@ def _auto_log_trade(sig: dict, price: float) -> None:
     """يسجّل الإشارة اليدوية في دفتر 'صفقاتي' كصفقة مفتوحة عند تحقق الدخول."""
     try:
         import datetime as _dt
-        opt = float(sig.get("option_price") or 0)
+        # سعر العقد الحقيقي لحظة الدخول (إن توفّر) وإلا سعر الإشارة
+        opt = float(sig.get("entry_option_price") or sig.get("option_price") or 0)
         # عدد العقود من رأس المال (1% مخاطرة) إن توفّر سعر العقد
         contracts = 1
         if opt > 0:
