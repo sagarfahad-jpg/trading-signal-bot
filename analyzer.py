@@ -832,7 +832,13 @@ def analyze(
         if   mtf_score == 3: score += 0.9   # الثلاثة يؤكدون
         elif mtf_score == 2: score += 0.3   # اثنان يؤكدان
         elif mtf_score == 1: score -= 0.5   # واحد فقط
-        else:                score -= 1.5   # لا أحد — عقوبة لكن لا رفض
+        else:                score -= 3.0   # لا أحد — عقوبة قوية (ضد الاتجاه العام)
+
+        # ── فلتر صارم: 0DTE + لا تأكيد من أي فريم = مقامرة → رفض ──────────────
+        is_scalp = (atr / price) < 0.007
+        if is_scalp and mtf_score == 0:
+            print(f"  [analyzer] {symbol}: رُفضت — 0DTE بلا تأكيد MTF (مقامرة)")
+            return None
 
         # أعد فحص الحد الأدنى بعد تعديل السكور
         if score < effective_min:
