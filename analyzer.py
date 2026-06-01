@@ -303,12 +303,8 @@ def _get_contract(symbol: str, direction: str, price: float, is_scalp: bool = Fa
         if is_scalp:
             expiry = available[0]   # 0DTE ⚡
         else:
-            if score >= 7.5:
-                min_days = 30   # Monthly
-            elif score >= 7.0:
-                min_days = 14   # Biweekly
-            else:
-                min_days = 7    # Weekly
+            # انتهاء أقصر = Premium أرخص (Theta أقل) — مناسب للمضاربة
+            min_days = 10 if score >= 7.5 else 5
             target_str = (today + timedelta(days=min_days)).strftime('%Y-%m-%d')
             candidates = [e for e in available if e >= target_str]
             expiry     = candidates[0] if candidates else available[0]

@@ -77,7 +77,19 @@ def format_message(s: SignalResult) -> str:
     except Exception:
         _acct = _cfg.ACCOUNT_SIZE
     risk_usd    = _acct * _cfg.RISK_PCT
-    pos_line    = f"📦 حجم الصفقة: {s.contracts} عقد (مخاطرة ~${risk_usd:.0f})\n" if s.contracts > 0 else ""
+    # التكلفة الفعلية لعقد واحد = Premium × 100
+    contract_cost = s.option_price * 100
+    if s.option_price > 0:
+        pos_line = (
+            f"📦 العقد: ~${contract_cost:.0f}/عقد  |  حسابك: ${_acct:.0f}\n"
+        )
+        # تحذير القدرة: لو عقد واحد أغلى من الحساب أو يتجاوز 50% منه
+        if contract_cost > _acct:
+            pos_line += f"🚫 العقد أغلى من حسابك — اختر سهماً أرخص أو استرايك أبعد\n"
+        elif contract_cost > _acct * 0.5:
+            pos_line += f"⚠️ العقد يستهلك >50% من حسابك — حذر\n"
+    else:
+        pos_line = ""
     mtf_warn    = "⚠️ تحذير: لا تأكيد من أي فريم زمني\n" if s.mtf_score == 0 else ""
 
     # ── سطر التحقق: سعر السهم + الوقت الدقيق (لمطابقة السعر من منصتك) ─────────
