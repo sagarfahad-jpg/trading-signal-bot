@@ -559,7 +559,20 @@ def quick_scan(symbol: str) -> Optional[dict]:
             target1    = round(near_sup if (supports and near_sup < max_t1) else max_t1, 2)
             target2    = round(target1 - atr * 0.6, 2)
 
+        # سقف الهدف (R:R ≤ 4.0) — مطابق لمنطق البوت الفعلي analyze()
+        MAX_RR = 4.0
         entry_mid = (entry_low + entry_high) / 2
+        if direction == 'call' and entry_mid > stop:
+            cap_t1 = round(entry_mid + (entry_mid - stop) * MAX_RR, 2)
+            if target1 > cap_t1:
+                target1 = cap_t1
+                target2 = round(target1 + atr * 0.6, 2)
+        elif direction == 'put' and stop > entry_mid:
+            cap_t1 = round(entry_mid - (stop - entry_mid) * MAX_RR, 2)
+            if target1 < cap_t1:
+                target1 = cap_t1
+                target2 = round(target1 - atr * 0.6, 2)
+
         if direction == 'call':
             rr = (target1 - entry_mid) / (entry_mid - stop) if entry_mid > stop else 0.0
         else:
