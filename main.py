@@ -513,6 +513,11 @@ def scan():
             print(f"  → {symbol} ⛔ تخطّى (ارتباط)")
             continue
 
+        # Cooldown دائم: لا ترسل لو فيه إشارة مفتوحة لنفس الأصل (يصمد عبر إعادة التشغيل)
+        if db.has_open_signal(symbol):
+            print(f"  → {symbol} ⛔ تخطّى (إشارة مفتوحة موجودة)")
+            continue
+
         msg = format_message(signal)
         try:
             df_chart = _dc.get_bars(symbol, '5m', '2d')

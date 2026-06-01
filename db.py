@@ -155,6 +155,24 @@ def request_exit(signal_id: int) -> bool:
     return False
 
 
+def has_open_signal(symbol: str) -> bool:
+    """هل توجد إشارة مفتوحة (pending/active) لنفس الأصل؟ (cooldown دائم)."""
+    if not is_configured():
+        return False
+    try:
+        r = requests.get(
+            f"{_url()}/rest/v1/{TABLE}"
+            f"?symbol=eq.{symbol}&status=in.(open,exit_requested,cancel_requested)&select=id",
+            headers=_headers(prefer=""),
+            timeout=8,
+        )
+        if r.status_code == 200:
+            return len(r.json()) > 0
+    except Exception as e:
+        print(f"  [db] has_open_signal: {e}")
+    return False
+
+
 def get_exit_requests() -> List[Dict]:
     """يجلب الإشارات المطلوب الخروج منها يدوياً."""
     if not is_configured():
