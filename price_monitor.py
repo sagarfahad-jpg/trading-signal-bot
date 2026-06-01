@@ -201,7 +201,8 @@ def _check(sig: dict, price: float) -> None:
 
     # ── المرحلة 2: active → مراقبة الأهداف ──────────────────────────────────
     entry_px = float(sig.get("entry_price") or (e_low + e_high) / 2)
-    opt_px   = float(sig.get("option_price") or 0)
+    # سعر الشراء الأساس = السعر الحقيقي لحظة الدخول (أو سعر الإشارة احتياطياً)
+    opt_px   = float(sig.get("entry_option_price") or sig.get("option_price") or 0)
     delta    = float(sig.get("delta") or 0)
     target1  = float(sig.get("target1") or 0)
     target2  = float(sig.get("target2") or 0)
