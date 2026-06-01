@@ -444,6 +444,11 @@ def scan():
         print(f"[{datetime.now().strftime('%H:%M')}] السوق مغلق.")
         return
 
+    # ── زر الإيقاف الرئيسي (من الواجهة) ───────────────────────────────────────
+    if db.get_config("bot_paused", "0") == "1":
+        print(f"[{datetime.now().strftime('%H:%M')}] ⏸ البوت متوقف (إيقاف يدوي).")
+        return
+
     # ── حماية رأس المال: حد الخسارة اليومي ────────────────────────────────────
     et        = pytz.timezone(config.TIMEZONE)
     today_str = datetime.now(et).strftime("%Y-%m-%d")
@@ -468,6 +473,13 @@ def scan():
     vix        = get_vix()
     watchlist  = _load_watchlist()
     thresholds = _load_thresholds()
+
+    # ── استبعاد الأصول المعطّلة مؤقتاً (من الواجهة) ────────────────────────────
+    disabled = set((db.get_config("disabled_assets", "") or "").split(","))
+    disabled = {d.strip().upper() for d in disabled if d.strip()}
+    if disabled:
+        watchlist = [s for s in watchlist if s.upper() not in disabled]
+
     ts         = datetime.now().strftime('%H:%M:%S')
 
     print(f"\n[{ts}] فحص {len(watchlist)} أصل بالتوازي  |  VIX: {vix:.1f}")

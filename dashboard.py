@@ -370,6 +370,19 @@ if st.sidebar.button("💾 حفظ حد الخسارة", use_container_width=True
     else:
         st.sidebar.error("❌ فشل الحفظ")
 
+# ── زر إيقاف/تشغيل البوت ───────────────────────────────────────────────────────
+st.sidebar.divider()
+_paused = db.get_config("bot_paused", "0") == "1"
+if _paused:
+    st.sidebar.error("🔴 البوت متوقف — لا يرسل إشارات جديدة")
+    if st.sidebar.button("▶️ تشغيل البوت", use_container_width=True):
+        db.set_config("bot_paused", "0"); st.rerun()
+else:
+    st.sidebar.success("🟢 البوت يعمل")
+    if st.sidebar.button("⏸ إيقاف الإرسال", use_container_width=True):
+        db.set_config("bot_paused", "1"); st.rerun()
+st.sidebar.caption("الإيقاف يمنع الإشارات الجديدة فقط — مراقبة المفتوحة تستمر")
+
 current_wl  = load_watchlist()
 selected_sym = st.sidebar.selectbox("رسم بياني للأصل", current_wl)
 show_levels  = st.sidebar.checkbox("عرض مستويات الإشارة على الرسم", value=True)
@@ -385,17 +398,33 @@ try:
 except Exception:
     pass
 
+# الأصول المعطّلة مؤقتاً (من Supabase)
+_disabled = set(d.strip().upper() for d in (db.get_config("disabled_assets", "") or "").split(",") if d.strip())
+
+def _save_disabled():
+    db.set_config("disabled_assets", ",".join(sorted(_disabled)))
+
 for sym in list(current_wl):
-    c1s, c2s = st.sidebar.columns([4, 1])
+    c1s, c2s, c3s = st.sidebar.columns([3, 1, 1])
     thresh = _thresholds.get(sym, config.MIN_SCORE)
+    _off   = sym.upper() in _disabled
+    _color = "#666" if _off else "#fff"
+    _badge = "⏸ معطّل" if _off else f"حد {thresh}"
     c1s.markdown(
-        f'<div class="wl-item">'
-        f'<span style="color:#fff;">{sym}</span>'
-        f'<span style="color:#888;font-size:.75rem;">حد {thresh}</span>'
+        f'<div class="wl-item" style="opacity:{0.5 if _off else 1};">'
+        f'<span style="color:{_color};">{sym}</span>'
+        f'<span style="color:#888;font-size:.75rem;">{_badge}</span>'
         f'</div>',
         unsafe_allow_html=True
     )
-    if c2s.button("🗑", key=f"del_{sym}"):
+    # زر تعطيل/تفعيل
+    if c2s.button("▶️" if _off else "⏸", key=f"toggle_{sym}", help="تفعيل" if _off else "تعطيل مؤقت"):
+        if _off: _disabled.discard(sym.upper())
+        else:    _disabled.add(sym.upper())
+        _save_disabled()
+        st.rerun()
+    # زر حذف
+    if c3s.button("🗑", key=f"del_{sym}"):
         current_wl.remove(sym)
         save_watchlist(current_wl)
         st.rerun()
@@ -1619,6 +1648,24 @@ with tab5:
             width="stretch",
             height=450,
         )
+
+    # ── أرشفة النتائج (محمي بتأكيد) ────────────────────────────────────────────
+    st.divider()
+    with st.expander("🗄️ أرشفة النتائج وبدء صفحة جديدة (خطر)", expanded=False):
+        st.caption(
+            "ينقل كل الإشارات الحالية إلى الأرشيف (signals_archive) ثم يبدأ من صفر. "
+            "استخدمه فقط عند نقطة بداية جديدة — ليس وسط أسبوع جمع البيانات."
+        )
+        _confirm = st.checkbox("⚠️ أنا متأكد — أرشِف وامسح كل الإشارات الحالية", key="arch_confirm")
+        if st.button("🗄️ أرشفة وبدء جديد", disabled=not _confirm, key="arch_btn"):
+            with st.spinner("جاري الأرشفة ..."):
+                n = db.archive_and_clear_signals()
+            st.cache_data.clear()
+            if n > 0:
+                st.success(f"✅ أُرشفت {n} إشارة — البيانات تبدأ من صفر الآن")
+            else:
+                st.warning("لا توجد إشارات للأرشفة (أو حدث خطأ).")
+            st.rerun()
 
 
 # ── Tab 6: My Trades (دفتر الصفقات اليدوي) ─────────────────────────────────────

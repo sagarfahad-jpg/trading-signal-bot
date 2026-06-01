@@ -298,6 +298,34 @@ def get_config(key: str, default: str = "") -> str:
     return default
 
 
+def archive_and_clear_signals() -> int:
+    """يأرشف كل الإشارات إلى signals_archive ثم يمسحها. يُرجع عدد المؤرشف."""
+    if not is_configured():
+        return 0
+    try:
+        rows = get_all_signals(limit=5000)
+        if not rows:
+            return 0
+        # أرشِف بالدفعات (نحتفظ بالـ id — لا تكرار لأننا نمسح بعدها)
+        for i in range(0, len(rows), 100):
+            requests.post(
+                f"{_url()}/rest/v1/signals_archive",
+                headers=_headers(prefer="return=minimal"),
+                json=rows[i:i+100],
+                timeout=20,
+            )
+        # امسح الجدول الأصلي
+        requests.delete(
+            f"{_url()}/rest/v1/{TABLE}?id=gt.0",
+            headers=_headers(prefer=""),
+            timeout=20,
+        )
+        return len(rows)
+    except Exception as e:
+        print(f"  [db] archive_and_clear: {e}")
+        return 0
+
+
 _acct_cache: dict = {"ts": 0.0, "value": None}
 
 def get_account_size(default: float) -> float:
