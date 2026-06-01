@@ -1473,6 +1473,45 @@ with tab5:
             except Exception:
                 st.info("بيانات غير كافية لعرض هيت ماب الساعات.")
 
+            # ── Win Rate حسب يوم الأسبوع (يكشف أي يوم أضعف — بالأدلة) ──────────
+            st.caption("📅 Win Rate حسب يوم الأسبوع (توقيت ET)")
+            try:
+                _et_tz = pytz.timezone(config.TIMEZONE)
+                df_d = decided.copy()
+                df_d["dow"] = (
+                    pd.to_datetime(df_d["created_at"], utc=True)
+                    .dt.tz_convert(_et_tz).dt.dayofweek
+                )
+                d_grp = df_d.groupby("dow").agg(
+                    total=("status", "count"),
+                    wins =("status", lambda x: (x.isin(["hit_t1","hit_t2"])).sum()),
+                ).reset_index()
+                d_grp["wr"] = (d_grp["wins"] / d_grp["total"] * 100).round(1)
+                _days_ar = {0:"الاثنين",1:"الثلاثاء",2:"الأربعاء",3:"الخميس",4:"الجمعة"}
+                d_grp["label"] = d_grp["dow"].map(_days_ar)
+                d_grp = d_grp[d_grp["dow"] <= 4]
+
+                fig_d = go.Figure(go.Bar(
+                    x=d_grp["label"], y=d_grp["wr"],
+                    text=[f"{v:.0f}%<br>({t})" for v, t in zip(d_grp["wr"], d_grp["total"])],
+                    textposition="outside",
+                    marker_color=[
+                        "#00c853" if v >= 60 else ("#ffd740" if v >= 45 else "#ff5252")
+                        for v in d_grp["wr"]
+                    ],
+                ))
+                fig_d.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="white", height=260, showlegend=False,
+                    yaxis=dict(range=[0, 110], gridcolor="#1e1e2e",
+                               title=dict(text="Win Rate %", font=dict(color="#aaa"))),
+                    xaxis=dict(gridcolor="#1e1e2e"),
+                    margin=dict(l=10, r=10, t=10, b=10),
+                )
+                st.plotly_chart(fig_d, use_container_width=True)
+            except Exception:
+                st.info("بيانات غير كافية لعرض أداء الأيام.")
+
             st.divider()
 
             # ── رؤى سلامة البيانات (MFE/MAE/المدة/سبب الخروج) ──────────────────

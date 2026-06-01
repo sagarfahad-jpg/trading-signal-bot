@@ -814,6 +814,9 @@ def analyze(
             # تشديد إضافي لافتتاح الاثنين (weekday 0)
             if _et_now.weekday() == 0 and _et_mins < (10 * 60 + 30):
                 effective_min += 1.0
+            # تشديد الجمعة بعد الظهر (weekday 4) — انتهاء أوبشن + خطر العطلة
+            if _et_now.weekday() == 4 and _et_mins >= (13 * 60):
+                effective_min += 1.0
         except Exception:
             pass
 
