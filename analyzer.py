@@ -799,10 +799,11 @@ def analyze(
         vix = vix_value if vix_value is not None else 20.0
         effective_min = min_score + (1.0 if vix > 25 else 0.0) + (1.5 if vix > 32 else 0.0)
 
-        # ── فلتر الجلسة (توقيت ET) ────────────────────────────────────────────
+        # ── فلتر الجلسة + اليوم (توقيت ET) ────────────────────────────────────
         # ذروة:  10:00 ص – 2:00 م  → بدون عقوبة
         # افتتاح: 9:35 – 10:00 ص  → +1.5 (تقلبات عالية)
         # إغلاق: 2:00 – 3:45 م   → +0.5
+        # افتتاح الاثنين 9:35–10:30 → +1.0 إضافية (اتجاه غير واضح بعد العطلة)
         try:
             _et_now  = datetime.now(pytz.timezone('America/New_York'))
             _et_mins = _et_now.hour * 60 + _et_now.minute
@@ -810,6 +811,9 @@ def analyze(
                 effective_min += 1.5
             elif _et_mins > 14 * 60:        # بعد 2:00 م
                 effective_min += 0.5
+            # تشديد إضافي لافتتاح الاثنين (weekday 0)
+            if _et_now.weekday() == 0 and _et_mins < (10 * 60 + 30):
+                effective_min += 1.0
         except Exception:
             pass
 
