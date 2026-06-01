@@ -80,6 +80,17 @@ def format_message(s: SignalResult) -> str:
     pos_line    = f"📦 حجم الصفقة: {s.contracts} عقد (مخاطرة ~${risk_usd:.0f})\n" if s.contracts > 0 else ""
     mtf_warn    = "⚠️ تحذير: لا تأكيد من أي فريم زمني\n" if s.mtf_score == 0 else ""
 
+    # ── سطر التحقق: سعر السهم + الوقت الدقيق (لمطابقة السعر من منصتك) ─────────
+    try:
+        import pytz as _pytz
+        from datetime import datetime as _dt
+        _now_et = _dt.now(_pytz.timezone("America/New_York")).strftime("%H:%M:%S ET")
+    except Exception:
+        _now_et = ""
+    verify_line = (
+        f"🔎 للتحقق: السهم @ {s.current_price:.2f}  |  ⏱ {_now_et}\n"
+    )
+
     return (
         f"🤖 إشارة تداول — {s.symbol}\n"
         f"{'━' * 28}\n"
@@ -107,6 +118,7 @@ def format_message(s: SignalResult) -> str:
         + (f"💰 Premium: ~${s.option_price:.2f}\n" if s.option_price > 0 else "")
         + greeks_line
         + pos_line
+        + verify_line
         + f"{'━' * 28}\n"
         f"للمراقبة فقط — ليست توصية شراء"
     )
