@@ -206,8 +206,9 @@ def get_cancel_requests() -> List[Dict]:
     return []
 
 
-def mark_entry_filled(signal_id: int, fill_price: float = 0.0) -> bool:
-    """يعلّم أن سعر الدخول قد تحقق ويسجّل سعر اللمسة الفعلي."""
+def mark_entry_filled(signal_id: int, fill_price: float = 0.0,
+                      opt_price: float = 0.0) -> bool:
+    """يعلّم أن سعر الدخول تحقق ويسجّل سعر السهم + سعر العقد الفعلي لحظة الدخول."""
     if not is_configured():
         return False
     try:
@@ -217,6 +218,8 @@ def mark_entry_filled(signal_id: int, fill_price: float = 0.0) -> bool:
         }
         if fill_price > 0:
             payload["entry_fill_price"] = round(fill_price, 2)
+        if opt_price > 0:
+            payload["entry_option_price"] = round(opt_price, 2)
         r = requests.patch(
             f"{_url()}/rest/v1/{TABLE}?id=eq.{signal_id}",
             headers=_headers(prefer=""),

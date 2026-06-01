@@ -183,7 +183,15 @@ def _check(sig: dict, price: float) -> None:
             trigger = lo <= price <= hi
 
         if trigger:
-            db.mark_entry_filled(sid, fill_price=price)   # نسجّل سعر اللمسة الفعلي
+            # سعر العقد الحقيقي لحظة الدخول
+            buy_opt = 0.0
+            try:
+                buy_opt = dc.get_option_price_by_contract(
+                    symbol, sig.get("strike"), sig.get("expiry"), direction)
+            except Exception:
+                buy_opt = 0.0
+            db.mark_entry_filled(sid, fill_price=price, opt_price=buy_opt)
+            sig["entry_option_price"] = buy_opt or sig.get("option_price")
             _lo_px[sid] = price
             _hi_px[sid] = price
             _alert_entry(sig, price)
@@ -306,6 +314,25 @@ def _opt_info(sig: dict) -> str:
         parts.append(str(sig["expiry"]))
     return " | ".join(parts)
 
+def _buy_price(sig: dict) -> float:
+    """سعر العقد الحقيقي لحظة الدخول (أو سعر الإشارة احتياطياً)."""
+    return float(sig.get("entry_option_price") or sig.get("option_price") or 0)
+
+def _contract_block(sig: dict, contract_now: float = 0.0) -> str:
+    """سطور: الاسترايك/الانتهاء + سعر الشراء + السعر الآن."""
+    info = _opt_info(sig)
+    buy  = _buy_price(sig)
+    lines = ""
+    if info:
+        lines += f"📋 {info}\n"
+    if buy > 0:
+        if contract_now > 0:
+            _p = (contract_now - buy) / buy * 100
+            lines += f"💰 الشراء: ${buy:.2f} → الآن: ${contract_now:.2f} ({_pct_str(_p)})\n"
+        else:
+            lines += f"💰 سعر الشراء: ${buy:.2f}\n"
+    return lines
+
 
 def _age_hours(sig: dict) -> float:
     try:
@@ -369,12 +396,11 @@ def _alert_manual_new(sig: dict) -> None:
 
 
 def _alert_entry(sig: dict, price: float) -> None:
-    info = _opt_info(sig)
     msg = (
         f"🟢 تنبيه دخول — {sig['symbol']} | {_dir_ar(sig)}  {_tag(sig)}\n"
         f"{'━'*26}\n"
-        + (f"{info}\n" if info else "")
-        + f"السعر وصل منطقة الدخول: {price:.2f}\n"
+        + _contract_block(sig)
+        + f"📍 السهم وصل منطقة الدخول: {price:.2f}\n"
         f"🛑 الوقف: {float(sig.get('stop_price') or 0):.2f}\n"
         f"🎯 هدف ١: {float(sig.get('target1') or 0):.2f}  |  هدف ٢: {float(sig.get('target2') or 0):.2f}\n"
         + ("📒 سُجّلت في «صفقاتي» — أغلقها بسعرك الفعلي عند الخروج\n" if sig.get("is_manual") else "")
@@ -385,11 +411,10 @@ def _alert_entry(sig: dict, price: float) -> None:
 
 
 def _alert_pct(sig, threshold, contract_now, pct):
-    opt = float(sig.get("option_price") or 0)
     msg = (
         f"📈 {sig['symbol']} | {_dir_ar(sig)}  {_tag(sig)}\n"
         f"العقد ارتفع {_pct_str(pct)}{'  مضاعفة! 🎯' if threshold == 100 else ''}\n"
-        + (f"الدخول: ${opt:.2f} → الآن: ~${contract_now:.2f}\n" if opt else "")
+        + _contract_block(sig, contract_now)
         + f"{'━'*24}\nللمراقبة فقط — ليست توصية"
     )
     send(msg, config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
@@ -407,8 +432,8 @@ def _alert_t1(sig, price, contract_now, pct):
         scale_line = "💰 فكّر بجني نصف الربح هنا\n"
     msg = (
         f"✅ {sig['symbol']} | {_dir_ar(sig)} — الهدف الأول!  {_tag(sig)}\n"
-        f"السهم وصل: {price:.2f}\n"
-        + (f"العقد: ${opt:.2f} → ~${contract_now:.2f} ({_pct_str(pct)})\n" if opt else "")
+        f"📍 السهم وصل: {price:.2f}\n"
+        + _contract_block(sig, contract_now)
         + f"\n{scale_line}"
         f"🔒 حرّك وقف الباقي لنقطة التعادل ({entry_p:.2f})\n"
         f"🎯 الهدف الثاني: {float(sig.get('target2') or 0):.2f}\n"
@@ -418,7 +443,6 @@ def _alert_t1(sig, price, contract_now, pct):
 
 
 def _alert_exit(sig, price, contract_now, pct, kind):
-    opt = float(sig.get("option_price") or 0)
     if kind == "T2":
         header = f"✅✅ {sig['symbol']} | {_dir_ar(sig)} — الهدف الثاني! اخرج كلياً"
     elif kind == "stop_after_t1":
@@ -429,20 +453,19 @@ def _alert_exit(sig, price, contract_now, pct, kind):
         header = f"❌ {sig['symbol']} | {_dir_ar(sig)} — الوقف ضُرب"
     msg = (
         f"{header}  {_tag(sig)}\n"
-        f"السهم: {price:.2f}\n"
-        + (f"العقد: ${opt:.2f} → ~${contract_now:.2f} ({_pct_str(pct)})\n" if opt else "")
+        f"📍 السهم: {price:.2f}\n"
+        + _contract_block(sig, contract_now)
         + f"{'━'*24}\nللمراقبة فقط — ليست توصية"
     )
     send(msg, config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
 
 
 def _alert_contract_decay(sig, contract_now, pct):
-    opt = float(sig.get("option_price") or 0)
     msg = (
         f"⚠️ تآكل العقد — {sig['symbol']} | {_dir_ar(sig)}  {_tag(sig)}\n"
         f"{'━'*26}\n"
         f"العقد فقد {_pct_str(pct)} من قيمته (السهم لم يضرب الوقف)\n"
-        + (f"الدخول: ${opt:.2f} → الآن: ~${contract_now:.2f}\n" if opt else "")
+        + _contract_block(sig, contract_now)
         + f"💡 السبب غالباً Theta — فكّر بالخروج لتقليل الخسارة\n"
         f"{'━'*26}\n"
         f"للمراقبة فقط — ليست توصية"
