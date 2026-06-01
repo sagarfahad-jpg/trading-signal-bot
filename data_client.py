@@ -264,3 +264,42 @@ def get_option_alpaca(symbol: str, direction: str, price: float, expiry_str: str
     except Exception as exc:
         print(f"  [alpaca opt] {symbol}: {exc}")
         return None
+
+
+def _occ_symbol(symbol: str, strike: float, expiry: str, direction: str) -> str:
+    """يبني رمز OCC: SPY + YYMMDD + C/P + strike*1000 (8 خانات)."""
+    e = str(expiry).replace("-", "")
+    yymmdd = e[2:8] if len(e) >= 8 else e        # 20260601 → 260601
+    right  = "C" if direction == "call" else "P"
+    strike_int = int(round(float(strike) * 1000))
+    return f"{symbol}{yymmdd}{right}{strike_int:08d}"
+
+
+def get_option_price_by_contract(symbol: str, strike: float, expiry: str,
+                                 direction: str) -> float:
+    """يجلب السعر الحقيقي (mid) لعقد محدد من Alpaca. يُرجع 0 عند الفشل."""
+    if not (config.ALPACA_API_KEY and config.ALPACA_SECRET_KEY):
+        return 0.0
+    if not strike or not expiry:
+        return 0.0
+    import requests
+    try:
+        occ = _occ_symbol(symbol, strike, expiry, direction)
+        r = requests.get(
+            "https://data.alpaca.markets/v1beta1/options/quotes/latest",
+            headers=_OPT_HEADERS,
+            params={"symbols": occ, "feed": "indicative"},
+            timeout=8,
+        )
+        if r.status_code == 200:
+            q = r.json().get("quotes", {}).get(occ, {})
+            bid = float(q.get("bp", 0) or 0)
+            ask = float(q.get("ap", 0) or 0)
+            if bid > 0 and ask > 0:
+                return round((bid + ask) / 2, 2)
+            last = float(q.get("p", 0) or 0)
+            if last > 0:
+                return round(last, 2)
+    except Exception as exc:
+        print(f"  [alpaca quote] {symbol}: {exc}")
+    return 0.0

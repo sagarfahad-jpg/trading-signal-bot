@@ -203,8 +203,17 @@ def _check(sig: dict, price: float) -> None:
     if abs(delta) < 0.01:
         delta = 0.45 if direction == "call" else -0.45
 
-    contract_now = max(0.01, opt_px + (price - entry_px) * delta) if opt_px else 0
-    pct          = (contract_now - opt_px) / opt_px * 100 if opt_px else 0
+    # ── السعر الحقيقي للعقد من Alpaca (بدل التقدير بالـ Delta) ───────────────
+    contract_now = 0.0
+    try:
+        contract_now = dc.get_option_price_by_contract(
+            symbol, sig.get("strike"), sig.get("expiry"), direction)
+    except Exception:
+        contract_now = 0.0
+    # fallback: تقدير بالـ Delta لو فشل الجلب
+    if contract_now <= 0:
+        contract_now = max(0.01, opt_px + (price - entry_px) * delta) if opt_px else 0
+    pct = (contract_now - opt_px) / opt_px * 100 if opt_px else 0
 
     # ── تتبّع MFE/MAE (بالـ R) + أعلى/أدنى سعر فعلي ──────────────────────────
     r_now = _current_r(direction, price, entry_px, stop_px)
