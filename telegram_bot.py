@@ -38,6 +38,22 @@ def format_message(s: SignalResult) -> str:
         smt_emoji  = "✅ يؤكد" if s.smt_direction == s.direction else "⚠️ يعارض"
         smt_line   = f"📡 SMT (NAS100/SPX500): {smt_dir_ar} — {smt_emoji}\n"
 
+    # ── Options Flow (مستويات المؤسسات) ───────────────────────────────────────
+    flow_line = ""
+    mp = getattr(s, "max_pain", 0)
+    cw = getattr(s, "call_wall", 0)
+    pw = getattr(s, "put_wall", 0)
+    pcr = getattr(s, "pcr", 0)
+    if mp or cw or pw:
+        bias = ""
+        if pcr:
+            bias = " 🟢 تحيّز شراء" if pcr < 0.7 else (" 🔴 تحيّز بيع" if pcr > 1.3 else " ↔ محايد")
+        flow_line = (
+            f"🏦 مستويات المؤسسات:\n"
+            f"   Max Pain: {mp:.0f} | Call Wall: {cw:.0f} 🎯 | Put Wall: {pw:.0f} 🛡\n"
+            f"   P/C: {pcr:.2f}{bias}\n"
+        )
+
     # ── VWAP ──────────────────────────────────────────────────────────────────
     vwap_line = ""
     if s.vwap > 0:
@@ -72,6 +88,7 @@ def format_message(s: SignalResult) -> str:
         f"{regime_line}"
         f"{htf_line}"
         f"{smt_line}"
+        f"{flow_line}"
         f"\n"
         f"⚙️ خطة التنفيذ:\n"
         f"💠 نوع الدخول: {s.entry_type}\n"

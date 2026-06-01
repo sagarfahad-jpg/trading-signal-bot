@@ -43,6 +43,11 @@ class SignalResult:
     # ── SMT ───────────────────────────────────────────────────────────────────
     smt_divergence: bool = False  # SMT divergence detected (^NDX vs ^GSPC)
     smt_direction:  str  = ""     # 'call' | 'put' | ''
+    # ── Options Flow (سياق — للتقييم لاحقاً) ───────────────────────────────────
+    max_pain:  float = 0.0
+    call_wall: float = 0.0
+    put_wall:  float = 0.0
+    pcr:       float = 0.0
 
 
 # ─── Indicators ───────────────────────────────────────────────────────────────
@@ -921,6 +926,17 @@ def analyze(
         risk_amount = _acct * _cfg.RISK_PCT
         contracts   = max(1, int(risk_amount / (option_price * 100))) if option_price > 0 else 1
 
+        # ── Options Flow (سياق مؤسسي — يُسجَّل للتقييم لاحقاً) ────────────────
+        of_mp = of_cw = of_pw = of_pcr = 0.0
+        try:
+            import options_flow as _of
+            flow = _of.get_options_flow(symbol)
+            if flow:
+                of_mp, of_cw, of_pw, of_pcr = (
+                    flow["max_pain"], flow["call_wall"], flow["put_wall"], flow["pcr"])
+        except Exception:
+            pass
+
         return SignalResult(
             symbol=symbol, direction=direction, confidence=confidence,
             score=score, entry_low=entry_low, entry_high=entry_high,
@@ -933,6 +949,7 @@ def analyze(
             htf_zone_tf=htf_zone_tf, htf_zone_type=htf_zone_type,
             htf_direction=htf_direction, cisd=is_cisd, displacement=is_displace,
             smt_divergence=bool(_smt_dir), smt_direction=_smt_dir,
+            max_pain=of_mp, call_wall=of_cw, put_wall=of_pw, pcr=of_pcr,
         )
 
     except Exception as e:
