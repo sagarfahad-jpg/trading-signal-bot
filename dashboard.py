@@ -1631,11 +1631,16 @@ with tab6:
             pc1, pc2, pc3 = st.columns([4, 2, 1])
             _tag = "📌 يدوية" if s.get("is_manual") else "🤖 بوت"
             _de  = "🟢 CALL" if s.get("direction") == "call" else "🔴 PUT"
+            _opt = float(s.get('option_price') or 0)
+            _opt_str = f" | 💰 العقد ~${_opt:.2f}" if _opt > 0 else ""
+            _strike = s.get('strike')
+            _strike_str = f" | Strike {float(_strike):.0f}" if _strike else ""
             pc1.markdown(
-                f"**{s['symbol']}** {_de}  {_tag}  \n"
+                f"**{s['symbol']}** {_de}  {_tag}{_strike_str}  \n"
                 f"<span style='color:#888;font-size:.8rem;'>"
                 f"دخول: {float(s.get('entry_low') or 0):.2f}–{float(s.get('entry_high') or 0):.2f} | "
-                f"وقف: {float(s.get('stop_price') or 0):.2f} | هدف: {float(s.get('target1') or 0):.2f}</span>",
+                f"وقف: {float(s.get('stop_price') or 0):.2f} | هدف: {float(s.get('target1') or 0):.2f}"
+                f"{_opt_str}</span>",
                 unsafe_allow_html=True,
             )
             pc2.caption(f"⏱ منذ {str(s.get('created_at',''))[:16].replace('T',' ')}")
@@ -1658,12 +1663,17 @@ with tab6:
             ac1, ac2, ac3 = st.columns([4, 2, 1])
             _tag = "📌 يدوية" if s.get("is_manual") else "🤖 بوت"
             _de  = "🟢 CALL" if s.get("direction") == "call" else "🔴 PUT"
+            _opt = float(s.get('option_price') or 0)
+            _opt_str = f" | 💰 العقد ~${_opt:.2f}" if _opt > 0 else ""
+            _strike = s.get('strike')
+            _strike_str = f" | Strike {float(_strike):.0f}" if _strike else ""
             ac1.markdown(
-                f"**{s['symbol']}** {_de}  {_tag}  \n"
+                f"**{s['symbol']}** {_de}  {_tag}{_strike_str}  \n"
                 f"<span style='color:#888;font-size:.8rem;'>"
                 f"دخول: {float(s.get('entry_price') or 0):.2f} | "
                 f"وقف: {float(s.get('stop_price') or 0):.2f} | "
-                f"هدف: {float(s.get('target1') or 0):.2f}</span>",
+                f"هدف: {float(s.get('target1') or 0):.2f}"
+                f"{_opt_str}</span>",
                 unsafe_allow_html=True,
             )
             ac2.caption(f"⏱ {str(s.get('entry_time') or s.get('created_at',''))[:16].replace('T',' ')}")
