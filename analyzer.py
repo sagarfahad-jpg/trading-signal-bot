@@ -879,8 +879,23 @@ def analyze(
         if score < effective_min:
             return None
 
-        # ── فلتر Risk/Reward ──────────────────────────────────────────────────
+        # ── سقف الهدف: يمنع R:R الوهمي من مقاومة/دعم بعيد جداً ────────────────
+        MAX_RR = 4.0
         entry_mid = (entry_low + entry_high) / 2
+        if direction == 'call' and entry_mid > stop:
+            risk      = entry_mid - stop
+            cap_t1    = round(entry_mid + risk * MAX_RR, 2)
+            if target1 > cap_t1:
+                target1 = cap_t1
+                target2 = round(target1 + atr * 0.6, 2)
+        elif direction == 'put' and stop > entry_mid:
+            risk      = stop - entry_mid
+            cap_t1    = round(entry_mid - risk * MAX_RR, 2)
+            if target1 < cap_t1:
+                target1 = cap_t1
+                target2 = round(target1 - atr * 0.6, 2)
+
+        # ── فلتر Risk/Reward ──────────────────────────────────────────────────
         if direction == 'call':
             rr = (target1 - entry_mid) / (entry_mid - stop) if entry_mid > stop else 0.0
         else:
