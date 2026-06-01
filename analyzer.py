@@ -308,30 +308,40 @@ def _get_contract(symbol: str, direction: str, price: float, is_scalp: bool = Fa
             candidates = [e for e in available if e >= target_str]
             expiry     = candidates[0] if candidates else available[0]
 
-        chain = ticker.option_chain(expiry)
-        opts  = chain.calls if direction == 'call' else chain.puts
-        if opts.empty:
-            return expiry.replace('-', ''), float(round(price)), 0.0, 0.0, 0.0, 0.0
+        # قيم افتراضية (yfinance) — قد تُستبدل بأسعار Alpaca الأدق
+        strike       = float(round(price))
+        option_price = 0.0
+        delta = iv = theta = 0.0
 
-        opts         = opts.copy()
-        opts['dist'] = (opts['strike'] - price).abs()
-        row          = opts.nsmallest(1, 'dist').iloc[0]
-        strike       = float(row['strike'])
+        try:
+            chain = ticker.option_chain(expiry)
+            opts  = chain.calls if direction == 'call' else chain.puts
+            if not opts.empty:
+                opts         = opts.copy()
+                opts['dist'] = (opts['strike'] - price).abs()
+                row          = opts.nsmallest(1, 'dist').iloc[0]
+                strike       = float(row['strike'])
+                bid  = float(row.get('bid',       0) or 0)
+                ask  = float(row.get('ask',       0) or 0)
+                last = float(row.get('lastPrice', 0) or 0)
+                if bid > 0 and ask > 0:
+                    option_price = round((bid + ask) / 2, 2)
+                elif last > 0:
+                    option_price = round(last, 2)
+                delta = round(float(row.get('delta', 0) or 0), 3)
+                iv    = round(float(row.get('impliedVolatility', 0) or 0) * 100, 1)
+                theta = round(float(row.get('theta', 0) or 0), 3)
+        except Exception:
+            pass
 
-        bid  = float(row.get('bid',       0) or 0)
-        ask  = float(row.get('ask',       0) or 0)
-        last = float(row.get('lastPrice', 0) or 0)
-        if bid > 0 and ask > 0:
-            option_price = round((bid + ask) / 2, 2)
-        elif last > 0:
-            option_price = round(last, 2)
-        else:
-            option_price = 0.0
-
-        # Greeks
-        delta = round(float(row.get('delta', 0) or 0), 3)
-        iv    = round(float(row.get('impliedVolatility', 0) or 0) * 100, 1)  # %
-        theta = round(float(row.get('theta', 0) or 0), 3)
+        # ── أولوية Alpaca للسعر والـ strike (أدق وأحدث من yfinance) ──────────
+        try:
+            alp = data_client.get_option_alpaca(symbol, direction, price, expiry)
+            if alp and alp.get("option_price", 0) > 0:
+                strike       = alp["strike"]
+                option_price = alp["option_price"]
+        except Exception:
+            pass
 
         return expiry.replace('-', ''), strike, option_price, delta, iv, theta
 

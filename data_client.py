@@ -197,3 +197,70 @@ def get_bars_batch(symbols: list, interval: str = "5m", period: str = "2d") -> d
         results[sym] = _fetch_yfinance(sym, interval, period)
 
     return results
+
+
+# ─── Options (Alpaca) ──────────────────────────────────────────────────────────
+
+_OPT_HEADERS = {
+    "APCA-API-KEY-ID":     config.ALPACA_API_KEY,
+    "APCA-API-SECRET-KEY": config.ALPACA_SECRET_KEY,
+}
+
+
+def get_option_alpaca(symbol: str, direction: str, price: float, expiry_str: str):
+    """
+    يجلب أقرب عقد للسعر من Alpaca + سعره الحقيقي (bid/ask mid).
+    expiry_str: 'YYYY-MM-DD'
+    يُرجع dict: {expiry, strike, option_price} أو None عند الفشل.
+    """
+    if not (config.ALPACA_API_KEY and config.ALPACA_SECRET_KEY):
+        return None
+    import requests
+    opt_type = "call" if direction == "call" else "put"
+    try:
+        # 1) قائمة العقود لذلك الانتهاء والنوع
+        r = requests.get(
+            "https://paper-api.alpaca.markets/v2/options/contracts",
+            headers=_OPT_HEADERS,
+            params={
+                "underlying_symbols": symbol,
+                "expiration_date":    expiry_str,
+                "type":               opt_type,
+                "limit":              200,
+            },
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return None
+        contracts = r.json().get("option_contracts", [])
+        if not contracts:
+            return None
+
+        # 2) أقرب strike للسعر
+        best = min(contracts, key=lambda c: abs(float(c["strike_price"]) - price))
+        opt_sym = best["symbol"]
+        strike  = float(best["strike_price"])
+
+        # 3) آخر سعر (bid/ask)
+        rq = requests.get(
+            "https://data.alpaca.markets/v1beta1/options/quotes/latest",
+            headers=_OPT_HEADERS,
+            params={"symbols": opt_sym, "feed": "indicative"},
+            timeout=10,
+        )
+        option_price = 0.0
+        if rq.status_code == 200:
+            q = rq.json().get("quotes", {}).get(opt_sym, {})
+            bid = float(q.get("bp", 0) or 0)
+            ask = float(q.get("ap", 0) or 0)
+            if bid > 0 and ask > 0:
+                option_price = round((bid + ask) / 2, 2)
+
+        return {
+            "expiry":       expiry_str.replace("-", ""),
+            "strike":       strike,
+            "option_price": option_price,
+        }
+    except Exception as exc:
+        print(f"  [alpaca opt] {symbol}: {exc}")
+        return None
