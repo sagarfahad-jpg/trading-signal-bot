@@ -164,9 +164,10 @@ def _check(sig: dict, price: float) -> None:
 
     ms = _milestones.setdefault(sid, set())
 
-    # ── إعلان الإشارة اليدوية أول مرة ────────────────────────────────────────
-    if sig.get("is_manual") and sid not in _announced:
+    # ── إعلان الإشارة اليدوية أول مرة (دائم — يصمد عبر إعادة التشغيل) ────────
+    if sig.get("is_manual") and not sig.get("announced") and sid not in _announced:
         _announced.add(sid)
+        db.mark_announced(sid)
         _alert_manual_new(sig)
 
     # ── المرحلة 1: pending → انتظار الدخول ──────────────────────────────────

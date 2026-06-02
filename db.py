@@ -226,6 +226,22 @@ def get_edit_pending() -> List[Dict]:
     return []
 
 
+def mark_announced(signal_id: int) -> bool:
+    """يعلّم أن الإشارة اليدوية أُعلن عنها (يصمد عبر إعادة التشغيل)."""
+    if not is_configured():
+        return False
+    try:
+        requests.patch(
+            f"{_url()}/rest/v1/{TABLE}?id=eq.{signal_id}",
+            headers=_headers(prefer=""),
+            json={"announced": True},
+            timeout=10,
+        )
+        return True
+    except Exception:
+        return False
+
+
 def clear_edit_pending(signal_id: int) -> bool:
     if not is_configured():
         return False
