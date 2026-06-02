@@ -1812,7 +1812,51 @@ with tab6:
         _s_opt   = st.number_input("سعر العقد التقريبي ($) — اختياري", min_value=0.0, step=0.05, format="%.2f", key="ms_opt")
 
         if st.button("📡 إرسال ومراقبة", type="primary", key="ms_send"):
-            if _s_sym and _s_elo > 0 and _s_ehi > 0 and _s_stop > 0 and _s_t1 > 0:
+            _errs = []
+            if not (_s_sym and _s_elo > 0 and _s_ehi > 0 and _s_stop > 0 and _s_t1 > 0):
+                _errs.append("أدخل: الأصل، منطقة الدخول، الوقف، وهدف ١")
+
+            # 1) فحص قرب منطقة الدخول من السعر الحالي (يكشف نقص رقم مثل 57 بدل 757)
+            _cur = 0.0
+            if _s_sym:
+                try:
+                    _dfp = _dc.get_bars(_s_sym, "5m", "1d")
+                    _cur = float(_dfp["Close"].iloc[-1]) if not _dfp.empty else 0.0
+                except Exception:
+                    _cur = 0.0
+            if _cur > 0 and _s_elo > 0:
+                _emid = (_s_elo + _s_ehi) / 2
+                _gap  = abs(_emid - _cur) / _cur * 100
+                if _gap > 15:
+                    _errs.append(
+                        f"⚠️ منطقة الدخول ({_emid:.2f}) بعيدة {_gap:.0f}% عن السعر الحالي "
+                        f"({_cur:.2f}) — تأكد من الأرقام (نقص رقم؟)"
+                    )
+
+            # 2) فحص اتجاه الأهداف/الوقف
+            if _s_t1 > 0:
+                _emid = (_s_elo + _s_ehi) / 2
+                if _s_dir == "call" and not (_s_t1 > _emid > _s_stop):
+                    _errs.append("CALL: لازم الهدف > الدخول > الوقف")
+                if _s_dir == "put" and not (_s_t1 < _emid < _s_stop):
+                    _errs.append("PUT: لازم الهدف < الدخول < الوقف")
+
+            # 3) فحص صيغة الانتهاء YYYYMMDD
+            if _s_exp:
+                import datetime as _dtv
+                ok_exp = False
+                try:
+                    _dtv.datetime.strptime(_s_exp, "%Y%m%d")
+                    ok_exp = _s_exp.startswith("20")
+                except Exception:
+                    ok_exp = False
+                if not ok_exp:
+                    _errs.append(f"صيغة الانتهاء خاطئة ({_s_exp}) — لازم YYYYMMDD مثل 20260602")
+
+            if _errs:
+                for e in _errs:
+                    st.error(e)
+            else:
                 _mid = round((_s_elo + _s_ehi) / 2, 2)
                 _payload = {
                     "symbol":       _s_sym,
@@ -1837,8 +1881,6 @@ with tab6:
                     st.success(f"✅ حُفظت إشارة {_s_sym} — البوت سيرسلها للتليجرام ويراقبها خلال لحظات")
                 else:
                     st.error("❌ فشل الحفظ في Supabase")
-            else:
-                st.warning("أدخل: الأصل، منطقة الدخول، الوقف، وهدف ١")
 
     st.divider()
 
