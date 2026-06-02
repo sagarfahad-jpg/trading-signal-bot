@@ -190,6 +190,23 @@ def get_exit_requests() -> List[Dict]:
     return []
 
 
+def update_signal_levels(signal_id: int, fields: dict) -> bool:
+    """يحدّث مستويات إشارة معلّقة (دخول/وقف/أهداف/strike/expiry) قبل التنفيذ."""
+    if not is_configured() or not fields:
+        return False
+    try:
+        r = requests.patch(
+            f"{_url()}/rest/v1/{TABLE}?id=eq.{signal_id}",
+            headers=_headers(prefer=""),
+            json=fields,
+            timeout=10,
+        )
+        return r.status_code in (200, 204)
+    except Exception as e:
+        print(f"  [db] update_signal_levels: {e}")
+    return False
+
+
 def cancel_signal(signal_id: int) -> bool:
     """يطلب إلغاء إشارة معلّقة (status=cancel_requested) — Railway يرسل التنبيه."""
     if not is_configured():

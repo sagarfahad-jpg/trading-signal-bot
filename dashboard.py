@@ -1755,6 +1755,41 @@ with tab6:
                     st.cache_data.clear()
                     st.success(f"✖ طُلب إلغاء {s['symbol']} — تنبيه للتليجرام خلال لحظات")
                     st.rerun()
+
+            # ── تعديل الإشارة قبل التنفيذ ──────────────────────────────────────
+            with st.expander(f"✏️ تعديل {s['symbol']}", expanded=False):
+                ec1, ec2, ec3 = st.columns(3)
+                e_lo = ec1.number_input("دخول من", value=float(s.get('entry_low') or 0),
+                                        step=0.1, format="%.2f", key=f"e_lo_{s['id']}")
+                e_hi = ec2.number_input("دخول إلى", value=float(s.get('entry_high') or 0),
+                                        step=0.1, format="%.2f", key=f"e_hi_{s['id']}")
+                e_st = ec3.number_input("الوقف", value=float(s.get('stop_price') or 0),
+                                        step=0.1, format="%.2f", key=f"e_st_{s['id']}")
+                ec4, ec5, ec6 = st.columns(3)
+                e_t1 = ec4.number_input("هدف ١", value=float(s.get('target1') or 0),
+                                        step=0.1, format="%.2f", key=f"e_t1_{s['id']}")
+                e_t2 = ec5.number_input("هدف ٢", value=float(s.get('target2') or 0),
+                                        step=0.1, format="%.2f", key=f"e_t2_{s['id']}")
+                e_sk = ec6.number_input("Strike", value=float(s.get('strike') or 0),
+                                        step=0.5, format="%.1f", key=f"e_sk_{s['id']}")
+                if st.button("💾 حفظ التعديل", key=f"e_save_{s['id']}"):
+                    _mid = round((e_lo + e_hi) / 2, 2)
+                    _ok = db.update_signal_levels(s["id"], {
+                        "entry_low":   round(e_lo, 2),
+                        "entry_high":  round(e_hi, 2),
+                        "entry_price": _mid,
+                        "stop_price":  round(e_st, 2),
+                        "target1":     round(e_t1, 2),
+                        "target2":     round(e_t2, 2) if e_t2 else round(e_t1, 2),
+                        "strike":      e_sk or None,
+                        "rr":          round(abs(e_t1 - _mid) / abs(_mid - e_st), 2) if _mid != e_st else 0,
+                    })
+                    if _ok:
+                        st.cache_data.clear()
+                        st.success("✅ حُفظ التعديل")
+                        st.rerun()
+                    else:
+                        st.error("❌ فشل التعديل")
         st.divider()
 
     # ── الإشارات النشطة (دخلت — يمكن الخروج الفوري) ────────────────────────────
@@ -1799,8 +1834,11 @@ with tab6:
                                  format_func=lambda x: "🟢 CALL" if x=="call" else "🔴 PUT")
         _s_strike= sf3.number_input("Strike", min_value=0.0, step=0.5, key="ms_strike")
 
+        import datetime as _dtm
         sf4, sf5, sf6 = st.columns(3)
-        _s_exp   = sf4.text_input("الانتهاء (YYYYMMDD)", "", key="ms_exp").strip()
+        _s_exp_date = sf4.date_input("تاريخ الانتهاء", value=_dtm.date.today() + _dtm.timedelta(days=7),
+                                     min_value=_dtm.date.today(), key="ms_exp")
+        _s_exp   = _s_exp_date.strftime("%Y%m%d")   # تحويل تلقائي للصيغة الصحيحة
         _s_elo   = sf5.number_input("دخول من (السهم)", min_value=0.0, step=0.1, format="%.2f", key="ms_elo")
         _s_ehi   = sf6.number_input("دخول إلى (السهم)", min_value=0.0, step=0.1, format="%.2f", key="ms_ehi")
 
