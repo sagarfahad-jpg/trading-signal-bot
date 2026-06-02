@@ -106,6 +106,14 @@ def _tick() -> None:
         except Exception as e:
             print(f"  [monitor] cancel {c.get('symbol')}: {e}")
 
+    # إشعارات تعديل الإشارات المعلّقة
+    for ed in db.get_edit_pending():
+        try:
+            _alert_edited(ed)
+            db.clear_edit_pending(ed["id"])
+        except Exception as e:
+            print(f"  [monitor] edit {ed.get('symbol')}: {e}")
+
     signals = signals + exits
     if not signals:
         return
@@ -484,6 +492,24 @@ def _alert_manual_exit(sig, price, r):
         f"أُغلقت يدوياً عند: {price:.2f}\n"
         f"{r_emoji} النتيجة: {r_sign}{r:.2f}R\n"
         f"{'━'*26}\n"
+        f"للمراقبة فقط — ليست توصية"
+    )
+    send(msg, config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
+
+
+def _alert_edited(sig):
+    info = _opt_info(sig)
+    e_low  = float(sig.get("entry_low")  or 0)
+    e_high = float(sig.get("entry_high") or 0)
+    msg = (
+        f"✏️ تعديل إشارة — {sig['symbol']} | {_dir_ar(sig)}  {_tag(sig)}\n"
+        f"{'━'*26}\n"
+        + (f"{info}\n" if info else "")
+        + f"💠 منطقة الدخول: {e_low:.2f} – {e_high:.2f}\n"
+        f"🛑 الوقف: {float(sig.get('stop_price') or 0):.2f}\n"
+        f"🎯 هدف ١: {float(sig.get('target1') or 0):.2f}  |  هدف ٢: {float(sig.get('target2') or 0):.2f}\n"
+        f"{'━'*26}\n"
+        f"🤖 البوت يراقبها بالبيانات الجديدة\n"
         f"للمراقبة فقط — ليست توصية"
     )
     send(msg, config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)

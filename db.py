@@ -191,20 +191,54 @@ def get_exit_requests() -> List[Dict]:
 
 
 def update_signal_levels(signal_id: int, fields: dict) -> bool:
-    """يحدّث مستويات إشارة معلّقة (دخول/وقف/أهداف/strike/expiry) قبل التنفيذ."""
+    """يحدّث مستويات إشارة معلّقة + يعلّمها للإشعار بالتعديل (edit_pending)."""
     if not is_configured() or not fields:
         return False
     try:
+        payload = dict(fields)
+        payload["edit_pending"] = True   # Railway يرسل تنبيه التعديل ثم يطفئه
         r = requests.patch(
             f"{_url()}/rest/v1/{TABLE}?id=eq.{signal_id}",
             headers=_headers(prefer=""),
-            json=fields,
+            json=payload,
             timeout=10,
         )
         return r.status_code in (200, 204)
     except Exception as e:
         print(f"  [db] update_signal_levels: {e}")
     return False
+
+
+def get_edit_pending() -> List[Dict]:
+    """يجلب الإشارات المعدّلة التي تنتظر إشعار تعديل."""
+    if not is_configured():
+        return []
+    try:
+        r = requests.get(
+            f"{_url()}/rest/v1/{TABLE}?edit_pending=eq.true&status=eq.open&select=*",
+            headers=_headers(prefer=""),
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        print(f"  [db] get_edit_pending: {e}")
+    return []
+
+
+def clear_edit_pending(signal_id: int) -> bool:
+    if not is_configured():
+        return False
+    try:
+        requests.patch(
+            f"{_url()}/rest/v1/{TABLE}?id=eq.{signal_id}",
+            headers=_headers(prefer=""),
+            json={"edit_pending": False},
+            timeout=10,
+        )
+        return True
+    except Exception:
+        return False
 
 
 def cancel_signal(signal_id: int) -> bool:
