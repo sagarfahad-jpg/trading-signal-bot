@@ -275,9 +275,31 @@ def _occ_symbol(symbol: str, strike: float, expiry: str, direction: str) -> str:
     return f"{symbol}{yymmdd}{right}{strike_int:08d}"
 
 
+def _quote_is_fresh(ts: str, max_age_sec: int = 120) -> bool:
+    """هل اقتباس الأوبشن حديث؟ (لتفادي تسجيل سعر قديم خاطئ)."""
+    if not ts:
+        return False
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        # Alpaca يرجع ISO مع نانوثانية أحياناً — نقتطع
+        t = ts.replace("Z", "+00:00")
+        if "." in t:
+            head, tail = t.split(".", 1)
+            frac = tail[:6]
+            tz = "+00:00"
+            if "+" in tail:
+                tz = "+" + tail.split("+", 1)[1]
+            t = f"{head}.{frac}{tz}"
+        q_time = _dt.fromisoformat(t)
+        age = (_dt.now(_tz.utc) - q_time).total_seconds()
+        return age <= max_age_sec
+    except Exception:
+        return True   # لو فشل التحليل، لا نمنع
+
+
 def get_option_price_by_contract(symbol: str, strike: float, expiry: str,
                                  direction: str) -> float:
-    """يجلب السعر الحقيقي (mid) لعقد محدد من Alpaca. يُرجع 0 عند الفشل."""
+    """يجلب السعر الحقيقي (mid) لعقد محدد من Alpaca. يُرجع 0 عند الفشل/قِدَم الاقتباس."""
     if not (config.ALPACA_API_KEY and config.ALPACA_SECRET_KEY):
         return 0.0
     if not strike or not expiry:
@@ -293,6 +315,9 @@ def get_option_price_by_contract(symbol: str, strike: float, expiry: str,
         )
         if r.status_code == 200:
             q = r.json().get("quotes", {}).get(occ, {})
+            # تجاهل الاقتباس القديم (stale) — يسبب أسعاراً خاطئة للـ 0DTE
+            if not _quote_is_fresh(q.get("t", "")):
+                return 0.0
             bid = float(q.get("bp", 0) or 0)
             ask = float(q.get("ap", 0) or 0)
             if bid > 0 and ask > 0:
