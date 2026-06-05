@@ -559,6 +559,17 @@ def quick_scan(symbol: str) -> Optional[dict]:
             target1    = round(near_sup if (supports and near_sup < max_t1) else max_t1, 2)
             target2    = round(target1 - atr * 0.6, 2)
 
+        # حد أدنى لمسافة الوقف (مطابق لمنطق analyze الفعلي)
+        MIN_STOP_DIST = max(atr * 0.5, 0.50)
+        if direction == 'call':
+            stop_cap = round(entry_low - MIN_STOP_DIST, 2)
+            if stop > stop_cap:
+                stop = stop_cap
+        else:
+            stop_cap = round(entry_high + MIN_STOP_DIST, 2)
+            if stop < stop_cap:
+                stop = stop_cap
+
         # سقف الهدف (R:R ≤ 4.0) — مطابق لمنطق البوت الفعلي analyze()
         MAX_RR = 4.0
         entry_mid = (entry_low + entry_high) / 2
@@ -937,11 +948,27 @@ def analyze(
                 if htf_stop < stop:
                     stop = htf_stop
 
-        # إعادة حساب R:R الحقيقي بعد تضييق الـ Stop
+        # ── حد أدنى لمسافة الوقف من حافة الدخول (يمنع stop داخل ضوضاء الشمعة)
+        MIN_STOP_DIST = max(atr * 0.5, 0.50)
+        if direction == 'call':
+            stop_cap = round(entry_low - MIN_STOP_DIST, 2)
+            if stop > stop_cap:
+                stop = stop_cap
+        else:
+            stop_cap = round(entry_high + MIN_STOP_DIST, 2)
+            if stop < stop_cap:
+                stop = stop_cap
+
+        # إعادة حساب R:R الحقيقي بعد ضبط الـ Stop
         if direction == 'call':
             rr = (target1 - entry_mid) / (entry_mid - stop) if entry_mid > stop else rr
         else:
             rr = (entry_mid - target1) / (stop - entry_mid) if stop > entry_mid else rr
+
+        # رفض الإشارة لو R:R نزل تحت الحد بعد توسيع الـ Stop
+        if rr < min_rr:
+            print(f"  [analyzer] {symbol}: رُفضت — R:R={rr:.2f} بعد تطبيق حد الوقف الأدنى")
+            return None
 
         # إعادة تقييم التأكيدات بالاتجاه النهائي (يُصحّح حالة انقلاب الاتجاه)
         if active_zone:
