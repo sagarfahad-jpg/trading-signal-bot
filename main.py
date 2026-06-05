@@ -656,6 +656,29 @@ def _premarket_loop():
 
 # ─── Entry point ───────────────────────────────────────────────────────────────
 
+def _send_startup_ping():
+    """يرسل رسالة قصيرة على Telegram عند كل إعادة تشغيل (تأكيد نجاح النشر)."""
+    try:
+        sha = (
+            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
+                                    cwd=os.path.dirname(__file__),
+                                    stderr=subprocess.DEVNULL)
+            .decode().strip()
+        )
+    except Exception:
+        sha = os.environ.get("RAILWAY_GIT_COMMIT_SHA", "")[:7] or "—"
+    now = datetime.now(pytz.timezone(config.TIMEZONE)).strftime("%Y-%m-%d %H:%M ET")
+    msg = (
+        "🔄 إعادة تشغيل البوت\n"
+        f"  • النسخة : {sha}\n"
+        f"  • الوقت  : {now}"
+    )
+    try:
+        send(msg, config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
+    except Exception as e:
+        print(f"  [startup_ping] فشل الإرسال: {e}")
+
+
 def main():
     if not config.TELEGRAM_TOKEN:
         print("❌ أضف TELEGRAM_TOKEN في .env"); return
@@ -666,6 +689,8 @@ def main():
     print(f"   الأصول    : {', '.join(_load_watchlist())}")
     print(f"   الفحص كل  : {config.SCAN_INTERVAL_MINUTES} دقيقة")
     print(f"   Dashboard  : streamlit run dashboard.py\n")
+
+    _send_startup_ping()
 
     threading.Thread(target=_outcome_loop,        daemon=True).start()
     threading.Thread(target=_weekly_report_loop,  daemon=True).start()
