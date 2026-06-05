@@ -1,5 +1,7 @@
 # بيانات حساسة — لا تُرفع أبداً
 .env
+.env.*
+!.env.example
 
 # ملفات بيانات مؤقتة
 signals_log.json
