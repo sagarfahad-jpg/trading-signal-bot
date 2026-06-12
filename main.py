@@ -439,15 +439,16 @@ def _daily_loss_limit() -> float:
 
 
 def scan():
+    """يُرجع قيمة VIX المُستخدَمة في هذا الـ scan (أو None عند الخروج المبكّر)."""
     global _daily_loss_halted_date
     if not is_market_open():
         print(f"[{datetime.now().strftime('%H:%M')}] السوق مغلق.")
-        return
+        return None
 
     # ── زر الإيقاف الرئيسي (من الواجهة) ───────────────────────────────────────
     if db.get_config("bot_paused", "0") == "1":
         print(f"[{datetime.now().strftime('%H:%M')}] ⏸ البوت متوقف (إيقاف يدوي).")
-        return
+        return None
 
     # ── حماية رأس المال: حد الخسارة اليومي ────────────────────────────────────
     et        = pytz.timezone(config.TIMEZONE)
@@ -468,7 +469,7 @@ def scan():
             print(f"🛑 توقف — خسارة اليوم {day_r}R بلغت الحد {limit_r}R")
         else:
             print(f"[{datetime.now().strftime('%H:%M')}] متوقف — حد الخسارة اليومي ({day_r}R).")
-        return
+        return None
 
     vix        = get_vix()
     watchlist  = _load_watchlist()
@@ -545,6 +546,7 @@ def scan():
             print(f"     ✗ فشل {symbol}")
 
     print(f"اكتمل — {sent} إشارة/إشارات.\n")
+    return vix
 
 
 # ─── Pre-market scan ─────────────────────────────────────────────────────────
@@ -662,6 +664,41 @@ def _premarket_loop():
 
 # ─── Entry point ───────────────────────────────────────────────────────────────
 
+def get_scan_interval(vix, current_interval: int, stability_counter: int) -> tuple:
+    """
+    يحدّد فترة المسح القادمة بناءً على VIX مع hysteresis (تأكيد 3 مسحات).
+
+    قواعد VIX:
+      VIX > 25    → 5 دقائق   (سوق متقلب جداً)
+      VIX > 18    → 10 دقائق  (متوسط)
+      VIX ≤ 18    → 15 دقيقة  (هادئ)
+      VIX None/0  → 15 دقيقة  (default آمن)
+
+    Hysteresis:
+      • target == current  → نبقى ونصفّر العداد
+      • target != current  → +1 للعداد، نطبّق فقط عند بلوغ 3
+
+    Returns:
+        (new_interval, new_stability_counter)
+    """
+    if vix is None or vix <= 0:
+        target = 15
+    elif vix > 25:
+        target = 5
+    elif vix > 18:
+        target = 10
+    else:
+        target = 15
+
+    if target == current_interval:
+        return current_interval, 0
+
+    new_counter = stability_counter + 1
+    if new_counter >= 3:
+        return target, 0
+    return current_interval, new_counter
+
+
 def _send_startup_ping():
     """يرسل رسالة قصيرة على Telegram عند كل إعادة تشغيل (تأكيد نجاح النشر)."""
     try:
@@ -693,7 +730,7 @@ def main():
 
     print("🤖 Trading Signal Bot  v3.0")
     print(f"   الأصول    : {', '.join(_load_watchlist())}")
-    print(f"   الفحص كل  : {config.SCAN_INTERVAL_MINUTES} دقيقة")
+    print(f"   الفحص كل  : {config.SCAN_INTERVAL_MINUTES} دقيقة (تكيّفي حسب VIX)")
     print(f"   Dashboard  : streamlit run dashboard.py\n")
 
     _send_startup_ping()
@@ -705,10 +742,32 @@ def main():
     price_monitor.start()
     start_command_listener(scan_callback=scan)
 
-    scan()
+    current_scan_interval = config.SCAN_INTERVAL_MINUTES
+    stability_counter     = 0
+
     while True:
-        time.sleep(config.SCAN_INTERVAL_MINUTES * 60)
-        scan()
+        vix_now = scan()
+
+        new_interval, stability_counter = get_scan_interval(
+            vix_now, current_scan_interval, stability_counter
+        )
+
+        if new_interval != current_scan_interval:
+            vix_str = f"{vix_now:.1f}" if vix_now is not None else "N/A"
+            print(
+                f"📊 scan_interval: {current_scan_interval} → "
+                f"{new_interval} دقيقة (VIX: {vix_str}, تأكيد 3/3)"
+            )
+            current_scan_interval = new_interval
+        elif stability_counter > 0:
+            vix_str = f"{vix_now:.1f}" if vix_now is not None else "N/A"
+            print(
+                f"⏳ scan_interval قيد المراجعة: "
+                f"current={current_scan_interval}, "
+                f"stability={stability_counter}/3, VIX={vix_str}"
+            )
+
+        time.sleep(current_scan_interval * 60)
 
 
 if __name__ == "__main__":

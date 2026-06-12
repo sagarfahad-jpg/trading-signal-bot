@@ -1,14 +1,21 @@
 # مهام تحسين مؤجلة (بعد إصلاح price accuracy)
 
+## ✅ مكتمل
+
+- [x] 12 يونيو 2026: `scan_interval` تكيّفي بناءً على VIX (5/10/15 دقيقة + hysteresis)
+
 ## متابعة فورية (الجمعة 2026-06-12)
 
-- [x] git push 2a3fdac (10:32 UTC)
-- [ ] **4:30 PM جدة (13:30 UTC):** مراقبة market open مع الكود الجديد
-- [ ] مقارنة وقت أول signal alert على Telegram مع شموع TradingView
+- [x] git push 2a3fdac (10:32 UTC) — price accuracy fix
+- [x] git push 8d94314 (15:31 UTC) — structure events (BOS/CHoCH/MSS)
+- [ ] **4:30 PM جدة (13:30 UTC):** مراقبة افتتاح السوق مع commit `8d94314`
+  - أول إشارة تُنشأ يجب يكون فيها `structure_event` و `structure_bias` مملوءين
+  - قارن وقت التنبيه بـ TradingView (ثوانٍ، ليس دقائق)
+  - راقب ظهور أول `MSS` على ترند قوي (NVDA / TSLA كمرشّحات)
 - [ ] لو ظهر `401` أو `fallback to yfinance` → rollback فوراً بـ:
   ```
   cd /Users/saqeralruqi/Desktop/trading_signal_bot && \
-  git revert 2a3fdac --no-edit && git push origin main
+  git revert 8d94314 --no-edit && git push origin main
   ```
 
 
