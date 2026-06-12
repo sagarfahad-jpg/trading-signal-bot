@@ -4,6 +4,8 @@ Chart Generator — يولّد صورة رسم بياني مع مستويات ا
 """
 
 import io
+from datetime import datetime, timezone
+from typing import Optional
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -13,10 +15,16 @@ import numpy as np
 from analyzer import SignalResult
 
 
-def generate_signal_chart(df: pd.DataFrame, signal: SignalResult) -> bytes:
+def generate_signal_chart(df: pd.DataFrame, signal: SignalResult,
+                          live_price: Optional[float] = None) -> bytes:
     """
     يولّد صورة PNG للرسم البياني مع مستويات الإشارة.
     يُرجع bytes جاهزة للإرسال عبر Telegram.
+
+    live_price: السعر اللحظي الحقيقي (من get_latest_trade). إذا مُرّر:
+      - يُرسم كخط أفقي أصفر/أبيض
+      - يُكتب label "السعر الآن: $XXX.XX"
+      - لو الفارق عن آخر Close أكبر من 0.3% يُرسم سهم يوضح الحركة
     """
     try:
         df = df.tail(80).copy()
@@ -74,6 +82,30 @@ def generate_signal_chart(df: pd.DataFrame, signal: SignalResult) -> bytes:
         ax1.axhspan(signal.entry_low, signal.entry_high,
                     alpha=0.08, color='#ffd740')
 
+        # ── السعر اللحظي (live_price) ────────────────────────────────────────
+        if live_price and live_price > 0:
+            last_close = float(df['Close'].iloc[-1])
+            last_idx   = len(df) - 1
+            # خط أفقي رفيع بطول الشارت كله
+            ax1.axhline(live_price, color='#ffeb3b', linewidth=1.0,
+                        linestyle='-', alpha=0.9, zorder=5)
+            # label على اليسار حتى ما يتداخل مع labels المستويات على اليمين
+            ax1.text(0, live_price, f' السعر الآن: ${live_price:.2f} ',
+                     color='#0f0f1a', fontsize=8, va='center', ha='left',
+                     fontfamily='DejaVu Sans', fontweight='bold',
+                     bbox=dict(facecolor='#ffeb3b', edgecolor='none', pad=2),
+                     zorder=6)
+            # سهم لو الفارق ≥ 0.3% (السعر تحرّك بعد آخر شمعة مغلقة)
+            if last_close > 0 and abs(live_price - last_close) / last_close >= 0.003:
+                arrow_color = '#00e676' if live_price > last_close else '#ff5252'
+                ax1.annotate(
+                    '', xy=(last_idx + 0.7, live_price),
+                    xytext=(last_idx, last_close),
+                    arrowprops=dict(arrowstyle='->', color=arrow_color,
+                                    lw=1.5, alpha=0.9),
+                    zorder=7,
+                )
+
         # ── عنوان ─────────────────────────────────────────────────────────────
         dir_ar    = 'CALL 🟢' if is_call else 'PUT 🔴'
         regime_ar = {'bull': '📈 Bull', 'bear': '📉 Bear', 'neutral': '↔ Neutral'}.get(signal.regime, '')
@@ -99,6 +131,13 @@ def generate_signal_chart(df: pd.DataFrame, signal: SignalResult) -> bytes:
         ax2.spines[:].set_color('#2a2a40')
         ax2.grid(color='#1e1e2e', linewidth=0.5)
         ax2.set_ylabel('Vol', color='#888', fontsize=8)
+
+        # ── Timestamp generation (زاوية سفلية يسرى) ──────────────────────────
+        gen_ts = datetime.now(timezone.utc).strftime('%H:%M:%S UTC')
+        ax2.text(0.005, 0.04, f'Generated: {gen_ts}',
+                 transform=ax2.transAxes, color='#666', fontsize=7,
+                 fontfamily='DejaVu Sans', alpha=0.8,
+                 verticalalignment='bottom', horizontalalignment='left')
 
         # ── Export ────────────────────────────────────────────────────────────
         buf = io.BytesIO()

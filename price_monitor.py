@@ -118,35 +118,51 @@ def _tick() -> None:
     if not signals:
         return
 
-    # جمّع الأسعار مرة واحدة لكل سهم (تقليل الطلبات)
+    # ── جمع الأسعار اللحظية (batch واحد) + آخر شمعة 1m لكل سهم ─────────────
     symbols = list({s["symbol"] for s in signals})
-    prices  = {}
+    prices  = dc.get_latest_trades(symbols)
+    bars1m: dict = {}
     for sym in symbols:
         try:
             df = dc.get_bars(sym, "1m", "1d")
-            if not df.empty:
-                prices[sym] = float(df["Close"].iloc[-1])
+            if df is not None and not df.empty:
+                bars1m[sym] = df.iloc[-1]
+                # fallback صامت: لو latest_trades ما رجّع السعر، استخدم آخر Close
+                if sym not in prices:
+                    prices[sym] = float(df["Close"].iloc[-1])
         except Exception:
             pass
 
     for sig in signals:
-        px = prices.get(sig["symbol"])
+        sym = sig["symbol"]
+        px  = prices.get(sym)
         if px:
             try:
-                _check(sig, px)
+                _check(sig, px, bars1m.get(sym))
             except Exception as e:
                 print(f"  [monitor] {sig.get('symbol')}: {e}")
 
 
 # ─── Core lifecycle ─────────────────────────────────────────────────────────
 
-def _check(sig: dict, price: float) -> None:
+def _check(sig: dict, price: float, bar=None) -> None:
+    """
+    bar: آخر شمعة 1m (pandas Series بأعمدة Open/High/Low/Close) أو None.
+    تُستخدم لالتقاط wicks لحظية حتى لو السعر اللحظي رجع للنطاق بعد اللمسة.
+    """
     sid       = sig["id"]
     symbol    = sig["symbol"]
     direction = sig.get("direction", "")
     filled    = bool(sig.get("entry_filled"))
     e_low     = float(sig.get("entry_low")  or sig.get("entry_price") or 0)
     e_high    = float(sig.get("entry_high") or sig.get("entry_price") or 0)
+
+    # نطاق شمعة الدقيقة (احتياطي للسعر الحالي لو الشمعة غير متوفرة)
+    try:
+        bar_hi = float(bar["High"]) if bar is not None else price
+        bar_lo = float(bar["Low"])  if bar is not None else price
+    except Exception:
+        bar_hi = bar_lo = price
 
     # ── خروج يدوي فوري (طلب من Dashboard) ────────────────────────────────────
     if sig.get("status") == "exit_requested":
@@ -177,21 +193,31 @@ def _check(sig: dict, price: float) -> None:
             _alert_pending_expired(sig)
             _finalize(sig, "cancelled", 0.0, 0.0, "expired_no_entry")
             return
-        # ── دخول تكيّفي حسب عرض المنطقة ──────────────────────────────────────
+        # ── دخول تكيّفي حسب عرض المنطقة (يفحص High/Low الشمعة للوكات) ─────
         lo, hi  = min(e_low, e_high), max(e_low, e_high)
         width   = hi - lo
         width_pct = (width / price * 100) if price else 0
         if width_pct >= 0.5 and width > 0:
             # منطقة عريضة → ننتظر النصف الأعمق (دخول أدق, R:R أفضل)
             if direction == "call":
-                trigger = lo <= price <= (lo + width * 0.5)
+                deep_lo, deep_hi = lo, lo + width * 0.5
             else:
-                trigger = (hi - width * 0.5) <= price <= hi
+                deep_lo, deep_hi = hi - width * 0.5, hi
+            # الشمعة لمست النصف الأعمق بأي wick؟
+            trigger = (bar_lo <= deep_hi) and (bar_hi >= deep_lo)
         else:
-            # منطقة ضيقة → أي لمسة تكفي
-            trigger = lo <= price <= hi
+            # منطقة ضيقة → أي لمسة (wick أو close) كافية
+            trigger = (bar_lo <= hi) and (bar_hi >= lo)
 
         if trigger:
+            # ── سعر التعبئة = اللمسة الفعلية للمنطقة (مو السعر الحالي) ─────
+            # CALL: اللمسة من الأسفل → min(price, bar.High)
+            # PUT : اللمسة من الأعلى → max(price, bar.Low)
+            if direction == "call":
+                fill_price = round(min(price, bar_hi), 2)
+            else:
+                fill_price = round(max(price, bar_lo), 2)
+
             # سعر العقد الحقيقي لحظة الدخول
             buy_opt = 0.0
             try:
@@ -199,13 +225,13 @@ def _check(sig: dict, price: float) -> None:
                     symbol, sig.get("strike"), sig.get("expiry"), direction)
             except Exception:
                 buy_opt = 0.0
-            db.mark_entry_filled(sid, fill_price=price, opt_price=buy_opt)
+            db.mark_entry_filled(sid, fill_price=fill_price, opt_price=buy_opt)
             sig["entry_option_price"] = buy_opt or sig.get("option_price")
-            _lo_px[sid] = price
-            _hi_px[sid] = price
-            _alert_entry(sig, price)
+            _lo_px[sid] = fill_price
+            _hi_px[sid] = fill_price
+            _alert_entry(sig, fill_price)
             if sig.get("is_manual"):
-                _auto_log_trade(sig, price)
+                _auto_log_trade(sig, fill_price)
         return   # لا نراقب الأهداف قبل تحقق الدخول
 
     # ── المرحلة 2: active → مراقبة الأهداف ──────────────────────────────────

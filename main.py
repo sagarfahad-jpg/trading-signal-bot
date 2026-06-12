@@ -521,7 +521,13 @@ def scan():
         msg = format_message(signal)
         try:
             df_chart = _dc.get_bars(symbol, '5m', '2d')
-            chart    = generate_signal_chart(df_chart, signal)
+            # السعر اللحظي للشارت — يتجاوز تأخير شموع 5m
+            try:
+                latest = _dc.get_latest_trade(symbol)
+                live   = float(latest["price"]) if latest and latest.get("price") else None
+            except Exception:
+                live = None
+            chart = generate_signal_chart(df_chart, signal, live_price=live)
         except Exception:
             chart = b""
         ok = send_photo(chart, msg, config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)

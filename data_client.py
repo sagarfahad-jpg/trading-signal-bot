@@ -144,6 +144,68 @@ def _fetch_yfinance(symbol: str, interval: str, period: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+# ─── Latest trade (سعر لحظي — مو إغلاق شمعة) ─────────────────────────────────
+
+def get_latest_trade(symbol: str) -> Optional[dict]:
+    """
+    آخر صفقة فعلية للسهم — أحدث بكثير من Close شمعة 1m.
+    يُرجع {"price": float, "timestamp": datetime} أو None.
+    """
+    if config.ALPACA_API_KEY and config.ALPACA_SECRET_KEY:
+        try:
+            from alpaca.data.requests import StockLatestTradeRequest
+            req  = StockLatestTradeRequest(symbol_or_symbols=symbol, feed="iex")
+            resp = _get_alpaca().get_stock_latest_trade(req)
+            trade = resp.get(symbol) if isinstance(resp, dict) else None
+            if trade is not None and getattr(trade, "price", 0):
+                return {
+                    "price":     float(trade.price),
+                    "timestamp": getattr(trade, "timestamp", None),
+                }
+        except Exception as exc:
+            print(f"  [alpaca latest] {symbol}: {exc}")
+    return _latest_yfinance_fallback(symbol)
+
+
+def get_latest_trades(symbols: list) -> dict:
+    """
+    Batch: يُرجع {symbol: price} للأسهم اللي نجح جلبها.
+    اللي يفشل يُكمَل من yfinance (مع تحذير في console).
+    """
+    out: dict = {}
+    if config.ALPACA_API_KEY and config.ALPACA_SECRET_KEY and symbols:
+        try:
+            from alpaca.data.requests import StockLatestTradeRequest
+            req  = StockLatestTradeRequest(symbol_or_symbols=list(symbols), feed="iex")
+            resp = _get_alpaca().get_stock_latest_trade(req)
+            if isinstance(resp, dict):
+                for sym, trade in resp.items():
+                    if trade is not None and getattr(trade, "price", 0):
+                        out[sym] = float(trade.price)
+        except Exception as exc:
+            print(f"  [alpaca latest batch] {exc}")
+
+    # fallback لأي رمز فشل
+    for sym in symbols:
+        if sym not in out:
+            fb = _latest_yfinance_fallback(sym)
+            if fb:
+                out[sym] = fb["price"]
+    return out
+
+
+def _latest_yfinance_fallback(symbol: str) -> Optional[dict]:
+    """yfinance fallback عند فشل Alpaca — يستخدم آخر 1m close."""
+    df = _fetch_yfinance(symbol, "1m", "1d")
+    if df is None or df.empty:
+        return None
+    print(f"  ⚠️ {symbol}: latest_trade fallback to yfinance (Alpaca غير متاح)")
+    return {
+        "price":     float(df["Close"].iloc[-1]),
+        "timestamp": df.index[-1].to_pydatetime() if hasattr(df.index[-1], "to_pydatetime") else df.index[-1],
+    }
+
+
 # ─── Batch fetch (للـ Dashboard — أسرع) ──────────────────────────────────────
 
 def get_bars_batch(symbols: list, interval: str = "5m", period: str = "2d") -> dict[str, pd.DataFrame]:
