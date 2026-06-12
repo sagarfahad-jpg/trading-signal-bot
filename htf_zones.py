@@ -16,6 +16,12 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import numpy as np
 
+# الدوال الأساسية للبنية السوقية تأتي من market_structure (مصدر واحد، لا تكرار)
+from market_structure import (
+    _pivot_levels, _find_fvg, _find_order_blocks,
+    _find_inversion_fvgs, structure_bias,
+)
+
 
 # ─── Data Class ───────────────────────────────────────────────────────────────
 
@@ -43,103 +49,7 @@ _cache: Dict[str, dict] = {}
 _CACHE_TTL = 900   # 15 دقيقة — HTF zones لا تتغير بسرعة
 
 
-# ─── ICT helpers (مستقلة عن analyzer لتجنب الاستيراد الدائري) ───────────────
-
-def _pivot_levels(df: pd.DataFrame, lookback: int = 4) -> Tuple[List[float], List[float]]:
-    highs, lows = [], []
-    n = len(df)
-    for i in range(lookback, n - lookback):
-        w_h = df['High'].iloc[i - lookback: i + lookback + 1]
-        if df['High'].iloc[i] == w_h.max():
-            highs.append(float(df['High'].iloc[i]))
-        w_l = df['Low'].iloc[i - lookback: i + lookback + 1]
-        if df['Low'].iloc[i] == w_l.min():
-            lows.append(float(df['Low'].iloc[i]))
-    return highs, lows
-
-
-def _find_fvg(df: pd.DataFrame) -> List[Tuple[float, float, str]]:
-    fvgs = []
-    for i in range(2, len(df)):
-        c0_h, c0_l = df['High'].iloc[i - 2], df['Low'].iloc[i - 2]
-        c2_h, c2_l = df['High'].iloc[i],     df['Low'].iloc[i]
-        if c2_l > c0_h:
-            fvgs.append((float(c0_h), float(c2_l), 'bullish'))
-        elif c2_h < c0_l:
-            fvgs.append((float(c2_h), float(c0_l), 'bearish'))
-    return fvgs[-10:]
-
-
-def _find_order_blocks(df: pd.DataFrame) -> List[Tuple[float, float, str]]:
-    obs = []
-    for i in range(1, len(df) - 4):
-        c    = df.iloc[i]
-        span = float(c['High'] - c['Low'])
-        if span == 0:
-            continue
-        following = df.iloc[i + 1: i + 5]
-        if c['Close'] < c['Open']:
-            if (following['Close'].max() - c['Low']) > span * 2.0:
-                obs.append((float(c['Low']), float(c['High']), 'bullish'))
-        elif c['Close'] > c['Open']:
-            if (c['High'] - following['Close'].min()) > span * 2.0:
-                obs.append((float(c['Low']), float(c['High']), 'bearish'))
-    return obs[-10:]
-
-
-# ─── Market Structure ─────────────────────────────────────────────────────────
-
-def structure_bias(df: pd.DataFrame, lookback: int = 60) -> str:
-    """
-    يحدد اتجاه البنية السوقية من HH/HL أو LH/LL.
-    Returns: 'bullish' | 'bearish' | 'neutral'
-    """
-    if len(df) < lookback:
-        return 'neutral'
-
-    recent = df.tail(lookback)
-    pivot_highs, pivot_lows = _pivot_levels(recent, lookback=4)
-
-    if len(pivot_highs) < 2 or len(pivot_lows) < 2:
-        return 'neutral'
-
-    h_prev, h_last = pivot_highs[-2], pivot_highs[-1]
-    l_prev, l_last = pivot_lows[-2],  pivot_lows[-1]
-
-    if h_last > h_prev and l_last > l_prev:
-        return 'bullish'   # HH + HL
-    if h_last < h_prev and l_last < l_prev:
-        return 'bearish'   # LH + LL
-    return 'neutral'
-
-
 # ─── Zone Detection ───────────────────────────────────────────────────────────
-
-def _find_inversion_fvgs(df: pd.DataFrame) -> List[Tuple[float, float, str]]:
-    """
-    فجوات منقلبة (Inversion FVG) — فجوة اخترقها السعر وأغلق خلفها فانقلب دورها:
-      bearish FVG كُسرت للأعلى → تصبح منطقة طلب (demand / دعم)
-      bullish FVG كُسرت للأسفل → تصبح منطقة عرض (supply / مقاومة)
-    تُرجع (low, high, new_direction).
-    """
-    out: List[Tuple[float, float, str]] = []
-    closes = df['Close'].values
-    highs  = df['High'].values
-    lows   = df['Low'].values
-    n = len(df)
-    for i in range(2, n - 1):
-        c0_h, c0_l = float(highs[i - 2]), float(lows[i - 2])
-        c2_h, c2_l = float(highs[i]),     float(lows[i])
-        if c2_h < c0_l:                          # bearish FVG
-            band_lo, band_hi = c2_h, c0_l
-            if any(closes[j] > band_hi for j in range(i + 1, n)):
-                out.append((band_lo, band_hi, 'demand'))   # انقلبت لدعم
-        elif c2_l > c0_h:                        # bullish FVG
-            band_lo, band_hi = c0_h, c2_l
-            if any(closes[j] < band_lo for j in range(i + 1, n)):
-                out.append((band_lo, band_hi, 'supply'))    # انقلبت لمقاومة
-    return out[-6:]
-
 
 def _zones_from_df(df: pd.DataFrame, timeframe: str, strength: float) -> List[HTFZone]:
     """يستخرج OBs و FVGs و Inversion FVGs من DataFrame لفريم معيّن."""

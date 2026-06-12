@@ -43,6 +43,10 @@ class SignalResult:
     # ── SMT ───────────────────────────────────────────────────────────────────
     smt_divergence: bool = False  # SMT divergence detected (^NDX vs ^GSPC)
     smt_direction:  str  = ""     # 'call' | 'put' | ''
+    # ── Market Structure Events (BOS / CHoCH / MSS) ──────────────────────────
+    structure_event: str = ""     # 'BOS' | 'CHoCH' | 'MSS' | ''
+    structure_bias:  str = ""     # 'bullish' | 'bearish' | ''
+    event_bars_ago:  int = 0      # كم شمعة مرّت منذ آخر حدث هيكلي
     # ── Options Flow (سياق — للتقييم لاحقاً) ───────────────────────────────────
     max_pain:  float = 0.0
     call_wall: float = 0.0
@@ -97,48 +101,10 @@ def _atr(df: pd.DataFrame, period: int = 14) -> float:
 
 # ─── ICT Concepts ─────────────────────────────────────────────────────────────
 
-def _pivot_levels(df: pd.DataFrame, lookback: int = 5) -> Tuple[List[float], List[float]]:
-    highs, lows = [], []
-    n = len(df)
-    for i in range(lookback, n - lookback):
-        w_h = df['High'].iloc[i - lookback: i + lookback + 1]
-        if df['High'].iloc[i] == w_h.max():
-            highs.append(float(df['High'].iloc[i]))
-        w_l = df['Low'].iloc[i - lookback: i + lookback + 1]
-        if df['Low'].iloc[i] == w_l.min():
-            lows.append(float(df['Low'].iloc[i]))
-    return highs, lows
-
-
-def _find_fvg(df: pd.DataFrame) -> List[Tuple[float, float, str]]:
-    fvgs = []
-    for i in range(2, len(df)):
-        c0_h = df['High'].iloc[i - 2]
-        c0_l = df['Low'].iloc[i - 2]
-        c2_h = df['High'].iloc[i]
-        c2_l = df['Low'].iloc[i]
-        if c2_l > c0_h:
-            fvgs.append((float(c0_h), float(c2_l), 'bullish'))
-        elif c2_h < c0_l:
-            fvgs.append((float(c2_h), float(c0_l), 'bearish'))
-    return fvgs[-8:]
-
-
-def _find_order_blocks(df: pd.DataFrame) -> List[Tuple[float, float, str]]:
-    obs = []
-    for i in range(1, len(df) - 4):
-        c = df.iloc[i]
-        span = float(c['High'] - c['Low'])
-        if span == 0:
-            continue
-        following = df.iloc[i + 1: i + 5]
-        if c['Close'] < c['Open']:
-            if (following['Close'].max() - c['Low']) > span * 2.0:
-                obs.append((float(c['Low']), float(c['High']), 'bullish'))
-        elif c['Close'] > c['Open']:
-            if (c['High'] - following['Close'].min()) > span * 2.0:
-                obs.append((float(c['Low']), float(c['High']), 'bearish'))
-    return obs[-8:]
+# ─── البنية السوقية الموحَّدة (re-export للحفاظ على واردات dashboard.py) ────
+from market_structure import (
+    _pivot_levels, _find_fvg, _find_order_blocks, detect_structure_events,
+)
 
 
 def _rsi_divergence(df: pd.DataFrame, lookback: int = 30) -> Tuple[bool, bool]:
@@ -740,6 +706,25 @@ def analyze(
         if vol_surge and last_bull:      bs += 1.0
         elif vol_surge and not last_bull: ps += 1.0
 
+        # ── Structure Events (BOS / CHoCH / MSS) ─────────────────────────────
+        ms = detect_structure_events(df5, pivot_size=5)
+        _ms_event = ms.get('last_event')
+        _ms_bias  = ms.get('current_bias')
+
+        if _ms_event == 'MSS':
+            if _ms_bias == 'bullish':   bs += 1.5
+            elif _ms_bias == 'bearish': ps += 1.5
+        elif _ms_event == 'BOS':
+            if _ms_bias == 'bullish':   bs += 1.0
+            elif _ms_bias == 'bearish': ps += 1.0
+        elif _ms_event == 'CHoCH':
+            if _ms_bias == 'bullish':   bs += 0.5
+            elif _ms_bias == 'bearish': ps += 0.5
+
+        # عقوبة الإشارة ضد البنية الحالية
+        if _ms_bias == 'bearish':   bs -= 0.8
+        elif _ms_bias == 'bullish': ps -= 0.8
+
         # ── VWAP ──────────────────────────────────────────────────────────────
         if above_vwap:  bs += 1.0
         else:           ps += 1.0
@@ -1023,6 +1008,9 @@ def analyze(
             htf_zone_tf=htf_zone_tf, htf_zone_type=htf_zone_type,
             htf_direction=htf_direction, cisd=is_cisd, displacement=is_displace,
             smt_divergence=bool(_smt_dir), smt_direction=_smt_dir,
+            structure_event=_ms_event or "",
+            structure_bias=_ms_bias or "",
+            event_bars_ago=int(ms.get('event_bars_ago') or 0),
             max_pain=of_mp, call_wall=of_cw, put_wall=of_pw, pcr=of_pcr,
         )
 
