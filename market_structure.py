@@ -272,3 +272,135 @@ def detect_structure_events(df: pd.DataFrame, pivot_size: int = 5) -> Dict:
         },
         'events_history': events[-10:],
     }
+
+
+# ─── Premium / Discount / Equilibrium (LuxAlgo SMC) ──────────────────────────
+
+def detect_pd_zones(df: pd.DataFrame,
+                    lookback: int = 50,
+                    min_range_pct: float = 0.005) -> Dict:
+    """
+    Premium / Discount / Equilibrium Zones من LuxAlgo SMC.
+
+    تصنيف صقر (نسبة من الـ range):
+      Premium     : أعلى 5%   (95%-100%)
+      Equilibrium : وسط 5%    (47.5%-52.5%)
+      Discount    : أدنى 5%   (0%-5%)
+      Neutral     : باقي المناطق
+
+    شرط الحد الأدنى للـ range:
+      لو range_pct < min_range_pct → سوق ميت → Neutral
+
+    Returns:
+        {
+            'zone':         'Premium' | 'Discount' | 'Equilibrium' | 'Neutral',
+            'swing_high':   float,
+            'swing_low':    float,
+            'range_pct':    float,    # range / current_price
+            'position_pct': float,    # 0-100 موقع السعر داخل الـ range
+        }
+    """
+    empty = {
+        'zone': 'Neutral', 'swing_high': 0.0, 'swing_low': 0.0,
+        'range_pct': 0.0, 'position_pct': 50.0,
+    }
+    if df is None or len(df) == 0:
+        return empty
+
+    window = df.tail(lookback)
+    swing_high = float(window['High'].max())
+    swing_low  = float(window['Low'].min())
+    current    = float(df['Close'].iloc[-1])
+
+    if current <= 0 or swing_high <= swing_low:
+        return empty
+
+    rng = swing_high - swing_low
+    range_pct = rng / current
+
+    if range_pct < min_range_pct:
+        return {
+            'zone': 'Neutral',
+            'swing_high':   swing_high,
+            'swing_low':    swing_low,
+            'range_pct':    range_pct,
+            'position_pct': 50.0,
+        }
+
+    position_pct = (current - swing_low) / rng * 100.0
+
+    if position_pct >= 95.0:
+        zone = 'Premium'
+    elif position_pct <= 5.0:
+        zone = 'Discount'
+    elif 47.5 <= position_pct <= 52.5:
+        zone = 'Equilibrium'
+    else:
+        zone = 'Neutral'
+
+    return {
+        'zone':         zone,
+        'swing_high':   swing_high,
+        'swing_low':    swing_low,
+        'range_pct':    range_pct,
+        'position_pct': position_pct,
+    }
+
+
+# قيم الـ scoring لكل (فريم، اتجاه، منطقة)
+_PD_BULL_WEIGHTS = {
+    'daily': {'Discount': +0.5,  'Premium': -0.75, 'Equilibrium': -0.25, 'Neutral': 0.0},
+    '4h':    {'Discount': +0.3,  'Premium': -0.45, 'Equilibrium': -0.15, 'Neutral': 0.0},
+    '1h':    {'Discount': +0.2,  'Premium': -0.30, 'Equilibrium': -0.10, 'Neutral': 0.0},
+}
+_PD_BEAR_WEIGHTS = {
+    'daily': {'Premium': +0.5,  'Discount': -0.75, 'Equilibrium': -0.25, 'Neutral': 0.0},
+    '4h':    {'Premium': +0.3,  'Discount': -0.45, 'Equilibrium': -0.15, 'Neutral': 0.0},
+    '1h':    {'Premium': +0.2,  'Discount': -0.30, 'Equilibrium': -0.10, 'Neutral': 0.0},
+}
+
+
+def detect_pd_zones_mtf(df1h: pd.DataFrame,
+                        df4h: pd.DataFrame,
+                        df1d: pd.DataFrame) -> Dict:
+    """
+    Multi-Timeframe Premium/Discount Analysis.
+    يحسب PD zones على Daily + 4H + 1H ويُرجع modifiers تراكميين + ملخص نصي.
+
+    Returns:
+        {
+            'daily': dict, '4h': dict, '1h': dict,
+            'bull_modifier': float,   # تعديل سكور الـ CALL
+            'bear_modifier': float,   # تعديل سكور الـ PUT
+            'summary':       str,
+        }
+    """
+    daily = detect_pd_zones(df1d, lookback=50)
+    h4    = detect_pd_zones(df4h, lookback=50)
+    h1    = detect_pd_zones(df1h, lookback=50)
+
+    bull_mod = (
+        _PD_BULL_WEIGHTS['daily'].get(daily['zone'], 0.0) +
+        _PD_BULL_WEIGHTS['4h'].get(h4['zone'], 0.0) +
+        _PD_BULL_WEIGHTS['1h'].get(h1['zone'], 0.0)
+    )
+    bear_mod = (
+        _PD_BEAR_WEIGHTS['daily'].get(daily['zone'], 0.0) +
+        _PD_BEAR_WEIGHTS['4h'].get(h4['zone'], 0.0) +
+        _PD_BEAR_WEIGHTS['1h'].get(h1['zone'], 0.0)
+    )
+
+    summary = (
+        f"D: {daily['zone']}({daily['position_pct']:.0f}%) | "
+        f"4H: {h4['zone']}({h4['position_pct']:.0f}%) | "
+        f"1H: {h1['zone']}({h1['position_pct']:.0f}%)"
+    )
+
+    return {
+        'daily':         daily,
+        '4h':            h4,
+        '1h':            h1,
+        'bull_modifier': round(bull_mod, 3),
+        'bear_modifier': round(bear_mod, 3),
+        'summary':       summary,
+    }

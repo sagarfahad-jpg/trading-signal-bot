@@ -47,6 +47,13 @@ class SignalResult:
     structure_event: str = ""     # 'BOS' | 'CHoCH' | 'MSS' | ''
     structure_bias:  str = ""     # 'bullish' | 'bearish' | ''
     event_bars_ago:  int = 0      # كم شمعة مرّت منذ آخر حدث هيكلي
+    # ── Premium/Discount Zones (MTF — Daily + 4H + 1H) ───────────────────────
+    pd_summary:       str   = ""   # "D: Discount(8%) | 4H: ... | 1H: ..."
+    pd_bull_modifier: float = 0.0  # +/- على bs
+    pd_bear_modifier: float = 0.0  # +/- على ps
+    pd_zone_daily:    str   = ""   # 'Premium' | 'Discount' | 'Equilibrium' | 'Neutral'
+    pd_zone_4h:       str   = ""
+    pd_zone_1h:       str   = ""
     # ── Options Flow (سياق — للتقييم لاحقاً) ───────────────────────────────────
     max_pain:  float = 0.0
     call_wall: float = 0.0
@@ -103,7 +110,8 @@ def _atr(df: pd.DataFrame, period: int = 14) -> float:
 
 # ─── البنية السوقية الموحَّدة (re-export للحفاظ على واردات dashboard.py) ────
 from market_structure import (
-    _pivot_levels, _find_fvg, _find_order_blocks, detect_structure_events,
+    _pivot_levels, _find_fvg, _find_order_blocks,
+    detect_structure_events, detect_pd_zones_mtf,
 )
 
 
@@ -706,6 +714,11 @@ def analyze(
         if vol_surge and last_bull:      bs += 1.0
         elif vol_surge and not last_bull: ps += 1.0
 
+        # ── Premium/Discount Zones (MTF: Daily + 4H + 1H) ────────────────────
+        pd_zones = detect_pd_zones_mtf(df1h, df4h, df1d)
+        bs += pd_zones['bull_modifier']
+        ps += pd_zones['bear_modifier']
+
         # ── Structure Events (BOS / CHoCH / MSS) ─────────────────────────────
         ms = detect_structure_events(df5, pivot_size=5)
         _ms_event = ms.get('last_event')
@@ -1011,6 +1024,12 @@ def analyze(
             structure_event=_ms_event or "",
             structure_bias=_ms_bias or "",
             event_bars_ago=int(ms.get('event_bars_ago') or 0),
+            pd_summary=pd_zones['summary'],
+            pd_bull_modifier=pd_zones['bull_modifier'],
+            pd_bear_modifier=pd_zones['bear_modifier'],
+            pd_zone_daily=pd_zones['daily']['zone'],
+            pd_zone_4h=pd_zones['4h']['zone'],
+            pd_zone_1h=pd_zones['1h']['zone'],
             max_pain=of_mp, call_wall=of_cw, put_wall=of_pw, pcr=of_pcr,
         )
 
