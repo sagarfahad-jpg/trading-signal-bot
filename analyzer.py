@@ -54,6 +54,11 @@ class SignalResult:
     pd_zone_daily:    str   = ""   # 'Premium' | 'Discount' | 'Equilibrium' | 'Neutral'
     pd_zone_4h:       str   = ""
     pd_zone_1h:       str   = ""
+    # ── Strong/Weak Highs & Lows (LuxAlgo SMC #4) ────────────────────────
+    strong_high:      float = 0.0
+    strong_low:       float = 0.0
+    near_strong_high: bool  = False
+    near_strong_low:  bool  = False
     # ── Options Flow (سياق — للتقييم لاحقاً) ───────────────────────────────────
     max_pain:  float = 0.0
     call_wall: float = 0.0
@@ -738,6 +743,31 @@ def analyze(
         if _ms_bias == 'bearish':   bs -= 0.8
         elif _ms_bias == 'bullish': ps -= 0.8
 
+        # ── Strong/Weak Highs & Lows (LuxAlgo SMC #4) ────────────────────
+        strength = ms.get('strength', {})
+        strong_h = strength.get('strong_high')
+        weak_h   = strength.get('weak_high')
+        strong_l = strength.get('strong_low')
+        weak_l   = strength.get('weak_low')
+
+        NEAR_SW_TOL = 0.004   # 0.4%
+
+        near_strong_high = bool(strong_h) and abs(price - strong_h) / price < NEAR_SW_TOL
+        near_strong_low  = bool(strong_l) and abs(price - strong_l) / price < NEAR_SW_TOL
+        near_weak_high   = bool(weak_h)   and abs(price - weak_h)   / price < NEAR_SW_TOL
+        near_weak_low    = bool(weak_l)   and abs(price - weak_l)   / price < NEAR_SW_TOL
+
+        # Scoring قياسي
+        if near_strong_high:   ps += 2.0
+        elif near_weak_high:   ps += 0.5
+        if near_strong_low:    bs += 2.0
+        elif near_weak_low:    bs += 0.5
+
+        # عقوبة الإشارة المعاكسة (Counter-trend warning)
+        # CALL أمام Strong High = خطر | PUT أمام Strong Low = خطر
+        if near_strong_high: bs -= 1.0
+        if near_strong_low:  ps -= 1.0
+
         # ── VWAP ──────────────────────────────────────────────────────────────
         if above_vwap:  bs += 1.0
         else:           ps += 1.0
@@ -1030,6 +1060,10 @@ def analyze(
             pd_zone_daily=pd_zones['daily']['zone'],
             pd_zone_4h=pd_zones['4h']['zone'],
             pd_zone_1h=pd_zones['1h']['zone'],
+            strong_high=float(strong_h) if strong_h else 0.0,
+            strong_low=float(strong_l) if strong_l else 0.0,
+            near_strong_high=bool(near_strong_high),
+            near_strong_low=bool(near_strong_low),
             max_pain=of_mp, call_wall=of_cw, put_wall=of_pw, pcr=of_pcr,
         )
 

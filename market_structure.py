@@ -247,6 +247,46 @@ def detect_structure_events(df: pd.DataFrame, pivot_size: int = 5) -> Dict:
                 last_pivot_low = None
                 last_pivot_low_bar = None
 
+    # ─── Trailing extremes + Strong/Weak classification (LuxAlgo SMC #4) ──
+    # محاكاة LuxAlgo trailing.top/bottom: أعلى/أدنى قيمة منذ آخر BOS/CHoCH/MSS
+    if events:
+        last_event_bar = events[-1]['bar']
+        window_after = df.iloc[last_event_bar:]
+        if len(window_after) > 0:
+            trailing_top    = float(window_after['High'].max())
+            trailing_bottom = float(window_after['Low'].min())
+        else:
+            trailing_top    = float(df['High'].iloc[-1])
+            trailing_bottom = float(df['Low'].iloc[-1])
+    else:
+        trailing_top    = float(df['High'].max())
+        trailing_bottom = float(df['Low'].min())
+
+    # تصنيف القوة بناءً على trend_bias
+    strong_high_level = None
+    weak_high_level   = None
+    strong_low_level  = None
+    weak_low_level    = None
+
+    if trend_bias == 'bearish':
+        # الترند هابط → القمة لم تُكسر (Strong) + القاع المخترَق ضعيف (Weak)
+        strong_high_level = trailing_top
+        weak_low_level    = trailing_bottom
+    elif trend_bias == 'bullish':
+        # الترند صاعد → القاع لم يُكسر (Strong) + القمة المخترَقة ضعيفة (Weak)
+        strong_low_level  = trailing_bottom
+        weak_high_level   = trailing_top
+    # neutral → كل المستويات None
+
+    strength_block = {
+        'strong_high':     strong_high_level,
+        'weak_high':       weak_high_level,
+        'strong_low':      strong_low_level,
+        'weak_low':        weak_low_level,
+        'trailing_top':    trailing_top,
+        'trailing_bottom': trailing_bottom,
+    }
+
     if not events:
         return {
             **empty,
@@ -256,6 +296,7 @@ def detect_structure_events(df: pd.DataFrame, pivot_size: int = 5) -> Dict:
                 'last_low':      last_pivot_low,
                 'last_low_bar':  last_pivot_low_bar,
             },
+            'strength': strength_block,
         }
 
     last = events[-1]
@@ -271,6 +312,7 @@ def detect_structure_events(df: pd.DataFrame, pivot_size: int = 5) -> Dict:
             'last_low_bar':  last_pivot_low_bar,
         },
         'events_history': events[-10:],
+        'strength': strength_block,
     }
 
 
