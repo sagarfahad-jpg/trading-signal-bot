@@ -470,7 +470,7 @@ def quick_scan(symbol: str) -> Optional[dict]:
         recent = df5.tail(100)
         pivot_highs, pivot_lows = _pivot_levels(recent)
         fvgs = _find_fvg(recent)
-        obs  = _find_order_blocks(recent)
+        obs  = _find_order_blocks(recent, atr_period=50)
 
         supports    = sorted([l for l in pivot_lows  if l < price], reverse=True)
         resistances = sorted([h for h in pivot_highs if h > price])
@@ -688,7 +688,7 @@ def analyze(
         recent = df5.tail(120)
         pivot_highs, pivot_lows = _pivot_levels(recent)
         fvgs = _find_fvg(recent)
-        obs  = _find_order_blocks(recent)
+        obs  = _find_order_blocks(recent, atr_period=50)
 
         supports    = sorted([l for l in pivot_lows  if l < price], reverse=True)
         resistances = sorted([h for h in pivot_highs if h > price])

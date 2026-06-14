@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 
@@ -40,62 +41,152 @@ def _pivot_levels(df: pd.DataFrame, lookback: int = 5) -> Tuple[List[float], Lis
 def _find_fvg(df: pd.DataFrame,
               limit: int = 10,
               track_mitigation: bool = True,
-              mitigation_source: str = 'highlow') -> List[Tuple[float, float, str]]:
+              mitigation_source: str = 'highlow',
+              dynamic_threshold: bool = True,
+              threshold_mult: float = 2.0,
+              require_close_confirmation: bool = True) -> List[Tuple[float, float, str]]:
     """
-    فجوات القيمة العادلة (FVG) مع تتبّع الـ Mitigation (LuxAlgo SMC #7).
+    فجوات القيمة العادلة (FVG) مع تتبّع الـ Mitigation (LuxAlgo SMC #7) +
+    Dynamic Threshold + شرط الإغلاق (LuxAlgo SMC #9).
 
-    track_mitigation=True (default):
-      Bullish FVG تُملأ إذا نزل السعر تحت bottom (c0_high)
-        → تُحوَّل إلى 'supply' (Inversion FVG → مقاومة)
-      Bearish FVG تُملأ إذا صعد السعر فوق top (c0_low)
-        → تُحوَّل إلى 'demand' (Inversion FVG → دعم)
+    track_mitigation=True:
+      Bullish FVG تُملأ إذا نزل السعر تحت bottom → 'supply'
+      Bearish FVG تُملأ إذا صعد السعر فوق top   → 'demand'
+
+    dynamic_threshold=True (LuxAlgo SMC #9.a):
+      الشمعة الوسطى (c1) يجب أن يكون |close-open|/open > threshold_mult × mean
+      → يفلتر الـ FVGs من شموع هادئة.
+
+    require_close_confirmation=True (LuxAlgo SMC #9.b):
+      c1.close فوق c0.high (bullish) أو تحت c0.low (bearish)
+      → الـ Displacement حقيقي وليس مجرد wick.
 
     Returns: List of (low, high, type) tuples where type is one of:
       'bullish', 'bearish', 'demand', 'supply'
     """
     fvgs = []
     n = len(df)
+    if n < 3:
+        return fvgs
+
     highs  = df['High'].values
     lows   = df['Low'].values
     closes = df['Close'].values
+    opens  = df['Open'].values
+
+    # حساب الـ threshold الديناميكي
+    threshold = 0.0
+    if dynamic_threshold:
+        valid_opens = np.where(opens > 0, opens, np.nan)
+        deltas = np.abs((closes - opens) / valid_opens)
+        deltas = deltas[~np.isnan(deltas)]
+        if len(deltas) > 0:
+            threshold = float(deltas.mean()) * threshold_mult
 
     for i in range(2, n):
         c0_h, c0_l = float(highs[i - 2]), float(lows[i - 2])
+        c1_o, c1_c = float(opens[i - 1]), float(closes[i - 1])
         c2_h, c2_l = float(highs[i]),     float(lows[i])
 
+        # delta% للشمعة الوسطى
+        c1_delta = abs(c1_c - c1_o) / c1_o if c1_o > 0 else 0.0
+
         if c2_l > c0_h:
-            # Bullish FVG: bottom=c0_h, top=c2_l
+            # Bullish FVG candidate
+            # شرط الإغلاق
+            if require_close_confirmation and c1_c <= c0_h:
+                continue
+            # Dynamic threshold
+            if dynamic_threshold and c1_delta < threshold:
+                continue
+
             fvg_type = 'bullish'
             if track_mitigation and i + 1 < n:
                 check_src = lows[i + 1:] if mitigation_source == 'highlow' else closes[i + 1:]
                 if len(check_src) > 0 and check_src.min() < c0_h:
-                    fvg_type = 'supply'  # ملئت → انقلبت إلى مقاومة
+                    fvg_type = 'supply'
             fvgs.append((c0_h, c2_l, fvg_type))
 
         elif c2_h < c0_l:
-            # Bearish FVG: bottom=c2_h, top=c0_l
+            # Bearish FVG candidate
+            if require_close_confirmation and c1_c >= c0_l:
+                continue
+            if dynamic_threshold and c1_delta < threshold:
+                continue
+
             fvg_type = 'bearish'
             if track_mitigation and i + 1 < n:
                 check_src = highs[i + 1:] if mitigation_source == 'highlow' else closes[i + 1:]
                 if len(check_src) > 0 and check_src.max() > c0_l:
-                    fvg_type = 'demand'  # ملئت → انقلبت إلى دعم
+                    fvg_type = 'demand'
             fvgs.append((c2_h, c0_l, fvg_type))
 
     return fvgs[-limit:]
 
 
-def _find_order_blocks(df: pd.DataFrame,
-                      limit: int = 10,
-                      track_mitigation: bool = True,
-                      mitigation_source: str = 'highlow') -> List[Tuple[float, float, str]]:
+def _calc_atr_series(df: pd.DataFrame, period: int = 200) -> np.ndarray:
     """
-    مناطق Order Blocks مع تتبّع الـ Mitigation (LuxAlgo SMC #6 + ICT Breaker).
+    يحسب سلسلة ATR كاملة (EMA-style) لاستخدامها في فلتر التقلب.
 
-    track_mitigation=True (default):
-      Bullish OB يُخترق إذا نزل السعر تحت ob_low بعد +5 شموع من التكوين
+    Args:
+        df: DataFrame مع High/Low/Close
+        period: فترة ATR (افتراضي 200 — LuxAlgo standard)
+
+    Returns:
+        numpy array بطول df، قيم 0 قبل اكتمال period
+    """
+    n = len(df)
+    if n == 0:
+        return np.array([])
+
+    high  = df['High'].values
+    low   = df['Low'].values
+    close = df['Close'].values
+
+    # True Range
+    tr = np.zeros(n)
+    tr[0] = high[0] - low[0]
+    for i in range(1, n):
+        tr[i] = max(
+            high[i] - low[i],
+            abs(high[i] - close[i - 1]),
+            abs(low[i] - close[i - 1])
+        )
+
+    # ATR (EMA-style)
+    atr = np.zeros(n)
+    if n >= period:
+        atr[period - 1] = tr[:period].mean()
+        for i in range(period, n):
+            atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period
+
+    return atr
+
+
+def _find_order_blocks(df: pd.DataFrame,
+                       limit: int = 10,
+                       track_mitigation: bool = True,
+                       mitigation_source: str = 'highlow',
+                       volatility_filter: bool = True,
+                       volatility_atr_mult: float = 2.0,
+                       atr_period: int = 200) -> List[Tuple[float, float, str]]:
+    """
+    مناطق Order Blocks مع تتبّع الـ Mitigation (LuxAlgo SMC #6) +
+    فلتر التقلب (LuxAlgo SMC #8).
+
+    track_mitigation=True:
+      Bullish OB يُخترق إذا نزل السعر تحت ob_low بعد +5 شموع
         → يُحوَّل إلى 'breaker_bear' (مقاومة)
       Bearish OB يُخترق إذا صعد السعر فوق ob_high بعد +5 شموع
         → يُحوَّل إلى 'breaker_bull' (دعم)
+
+    volatility_filter=True (LuxAlgo SMC #8):
+      تجاوز الشموع المتقلبة جداً (high-low ≥ volatility_atr_mult × ATR(atr_period))
+      لأنها لا تمثل OB حقيقياً (news spikes / liquidity wicks).
+
+      ⚠️ atr_period: على شارت 5m استخدم 30-50 (للنوافذ القصيرة)،
+                     على شارت Daily استخدم 200 (LuxAlgo standard).
+                     الفلتر لا يعمل إذا len(df) < atr_period.
 
     Returns: List of (low, high, type) tuples where type is one of:
       'bullish', 'bearish', 'breaker_bull', 'breaker_bear'
@@ -107,11 +198,23 @@ def _find_order_blocks(df: pd.DataFrame,
     closes = df['Close'].values
     opens  = df['Open'].values
 
+    # ATR للفلتر — احسبها مرة واحدة قبل الـ loop
+    atr_values = None
+    if volatility_filter and n >= atr_period:
+        atr_values = _calc_atr_series(df, period=atr_period)
+
     for i in range(1, n - 4):
         ob_low, ob_high = float(lows[i]), float(highs[i])
         span = ob_high - ob_low
         if span == 0:
             continue
+
+        # فلتر التقلب — تجاوز الشموع المتقلبة جداً
+        if volatility_filter and atr_values is not None:
+            atr_at_i = float(atr_values[i])
+            if atr_at_i > 0 and span >= volatility_atr_mult * atr_at_i:
+                continue   # شمعة متقلبة → لا تُحسب OB
+
         following = df.iloc[i + 1: i + 5]
 
         if closes[i] < opens[i]:
