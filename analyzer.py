@@ -59,6 +59,15 @@ class SignalResult:
     strong_low:       float = 0.0
     near_strong_high: bool  = False
     near_strong_low:  bool  = False
+    # ── HTF Liquidity Levels (LuxAlgo SMC #10+#11) ───────────────────────
+    pwh:       float = 0.0
+    pwl:       float = 0.0
+    pmh:       float = 0.0
+    pml:       float = 0.0
+    near_pwh:  bool  = False
+    near_pwl:  bool  = False
+    near_pmh:  bool  = False
+    near_pml:  bool  = False
     # ── Internal vs Swing Structure (LuxAlgo SMC #5) ─────────────────────
     swing_event:   str = ""   # 'BOS' | 'CHoCH' | 'MSS' | ''
     swing_bias:    str = ""   # 'bullish' | 'bearish' | ''
@@ -121,7 +130,7 @@ def _atr(df: pd.DataFrame, period: int = 14) -> float:
 from market_structure import (
     _pivot_levels, _find_fvg, _find_order_blocks,
     detect_structure_events, detect_pd_zones_mtf,
-    detect_structure_dual,
+    detect_structure_dual, prev_period_levels,
 )
 
 
@@ -427,7 +436,7 @@ def quick_scan(symbol: str) -> Optional[dict]:
     """
     try:
         df5  = data_client.get_bars(symbol, '5m', '2d')
-        df1d = data_client.get_bars(symbol, '1d', '30d')
+        df1d = data_client.get_bars(symbol, '1d', '90d')
         if df5.empty or len(df5) < 40 or df1d.empty or len(df1d) < 15:
             return None
 
@@ -451,6 +460,13 @@ def quick_scan(symbol: str) -> Optional[dict]:
         pdh = float(df1d['High'].iloc[-2])
         pdl = float(df1d['Low'].iloc[-2])
 
+        # ── HTF Liquidity Levels (PWH/PWL/PMH/PML) — LuxAlgo SMC #10+#11 ──
+        htf_lvls = prev_period_levels(df1d)
+        pwh = htf_lvls['pwh']
+        pwl = htf_lvls['pwl']
+        pmh = htf_lvls['pmh']
+        pml = htf_lvls['pml']
+
         recent = df5.tail(100)
         pivot_highs, pivot_lows = _pivot_levels(recent)
         fvgs = _find_fvg(recent)
@@ -465,6 +481,12 @@ def quick_scan(symbol: str) -> Optional[dict]:
         at_res   = abs(price - near_res) / price < 0.004
         near_pdl = abs(price - pdl)     / price < 0.005
         near_pdh = abs(price - pdh)     / price < 0.005
+
+        HTF_TOL = 0.006   # 0.6% — أوسع قليلاً من PDH لطبيعة HTF
+        near_pwh = pwh is not None and abs(price - pwh) / price < HTF_TOL
+        near_pwl = pwl is not None and abs(price - pwl) / price < HTF_TOL
+        near_pmh = pmh is not None and abs(price - pmh) / price < HTF_TOL
+        near_pml = pml is not None and abs(price - pml) / price < HTF_TOL
 
         # OB نشطة (لم تُخترق)
         bull_ob = any(lo <= price <= hi * 1.003 for lo, hi, t in obs if t == 'bullish')
@@ -501,6 +523,11 @@ def quick_scan(symbol: str) -> Optional[dict]:
         elif rsi > 50 and not rsi_rising: ps += 1.0
         if at_sup or near_pdl:   bs += 2.5
         if at_res or near_pdh:   ps += 2.5
+        # ── HTF Liquidity scoring (sensitivity hierarchy: PDH=2.5 → PWH=3.0 → PMH=3.5) ──
+        if near_pwl: bs += 3.0
+        if near_pwh: ps += 3.0
+        if near_pml: bs += 3.5
+        if near_pmh: ps += 3.5
         if bull_fvg:   bs += 1.5
         if bear_fvg:   ps += 1.5
         if bull_ob:    bs += 2.0
@@ -615,7 +642,7 @@ def analyze(
 
     try:
         df5  = data_client.get_bars(symbol, '5m', '3d')
-        df1d = data_client.get_bars(symbol, '1d', '60d')
+        df1d = data_client.get_bars(symbol, '1d', '90d')
         df1h = data_client.get_bars(symbol, '1h', '14d')
         df4h = data_client.get_bars(symbol, '4h', '30d')
 
@@ -650,6 +677,13 @@ def analyze(
         pdh = float(df1d['High'].iloc[-2])
         pdl = float(df1d['Low'].iloc[-2])
 
+        # ── HTF Liquidity Levels (PWH/PWL/PMH/PML) — LuxAlgo SMC #10+#11 ──
+        htf_lvls = prev_period_levels(df1d)
+        pwh = htf_lvls['pwh']
+        pwl = htf_lvls['pwl']
+        pmh = htf_lvls['pmh']
+        pml = htf_lvls['pml']
+
         # ── ICT Structures ────────────────────────────────────────────────────
         recent = df5.tail(120)
         pivot_highs, pivot_lows = _pivot_levels(recent)
@@ -665,6 +699,12 @@ def analyze(
         at_res   = abs(price - near_res) / price < 0.004
         near_pdl = abs(price - pdl)     / price < 0.005
         near_pdh = abs(price - pdh)     / price < 0.005
+
+        HTF_TOL = 0.006   # 0.6% — أوسع قليلاً من PDH لطبيعة HTF
+        near_pwh = pwh is not None and abs(price - pwh) / price < HTF_TOL
+        near_pwl = pwl is not None and abs(price - pwl) / price < HTF_TOL
+        near_pmh = pmh is not None and abs(price - pmh) / price < HTF_TOL
+        near_pml = pml is not None and abs(price - pml) / price < HTF_TOL
 
         # OB نشطة (لم تُخترق)
         bull_ob = any(lo <= price <= hi * 1.003 for lo, hi, t in obs if t == 'bullish')
@@ -713,6 +753,11 @@ def analyze(
 
         if at_sup or near_pdl:   bs += 2.5
         if at_res or near_pdh:   ps += 2.5
+        # ── HTF Liquidity scoring (sensitivity hierarchy: PDH=2.5 → PWH=3.0 → PMH=3.5) ──
+        if near_pwl: bs += 3.0
+        if near_pwh: ps += 3.0
+        if near_pml: bs += 3.5
+        if near_pmh: ps += 3.5
 
         if bull_fvg:   bs += 1.5
         if bear_fvg:   ps += 1.5
@@ -972,7 +1017,9 @@ def analyze(
             elif bull_break: entry_type = 'Breaker Block 🔄'
             elif bull_ob:    entry_type = 'Order Block 🏛️'
             elif bull_fvg:   entry_type = 'FVG ⚡'
-            elif at_sup or near_pdl: entry_type = 'إعادة اختبار'
+            elif near_pml:           entry_type = 'PML 🌙'           # شهري — الأعمق
+            elif near_pwl:           entry_type = 'PWL 📅'           # أسبوعي
+            elif at_sup or near_pdl: entry_type = 'إعادة اختبار'   # يومي
             else:            entry_type = 'اختراق'
         else:
             base       = near_res if at_res else (price + atr * 0.2)
@@ -987,6 +1034,8 @@ def analyze(
             elif bear_break: entry_type = 'Breaker Block 🔄'
             elif bear_ob:    entry_type = 'Order Block 🏛️'
             elif bear_fvg:   entry_type = 'FVG ⚡'
+            elif near_pmh:           entry_type = 'PMH 🌙'
+            elif near_pwh:           entry_type = 'PWH 📅'
             elif at_res or near_pdh: entry_type = 'إعادة اختبار'
             else:            entry_type = 'اختراق'
 
@@ -1123,6 +1172,14 @@ def analyze(
             strong_low=float(strong_l) if strong_l else 0.0,
             near_strong_high=bool(near_strong_high),
             near_strong_low=bool(near_strong_low),
+            pwh=float(pwh) if pwh else 0.0,
+            pwl=float(pwl) if pwl else 0.0,
+            pmh=float(pmh) if pmh else 0.0,
+            pml=float(pml) if pml else 0.0,
+            near_pwh=bool(near_pwh),
+            near_pwl=bool(near_pwl),
+            near_pmh=bool(near_pmh),
+            near_pml=bool(near_pml),
             swing_event=_swing_event or "",
             swing_bias=_swing_bias or "",
             alignment=alignment or "",

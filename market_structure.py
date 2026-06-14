@@ -580,3 +580,56 @@ def detect_structure_dual(df: pd.DataFrame,
         'confluence': confluence,
         'alignment':  alignment,
     }
+
+
+# ─── HTF Liquidity Levels (PWH/PWL/PMH/PML) — LuxAlgo SMC #10+#11 ────────────
+
+def prev_period_levels(df1d: pd.DataFrame) -> Dict:
+    """
+    يستخرج مستويات الأسبوع/الشهر السابق المكتمل من df1d.
+
+    Returns:
+        {
+            'pwh': float | None,    # Previous Week High
+            'pwl': float | None,    # Previous Week Low
+            'pmh': float | None,    # Previous Month High
+            'pml': float | None,    # Previous Month Low
+        }
+
+    ملاحظات:
+        • iloc[-1] في الـ resample هو الفترة الحالية (قيد التكوين)
+        • iloc[-2] هو الفترة المكتملة السابقة → هذا ما نريد
+    """
+    empty = {'pwh': None, 'pwl': None, 'pmh': None, 'pml': None}
+    if df1d is None or len(df1d) < 5:
+        return empty
+
+    # تأكد من DatetimeIndex (شرط لازم لـ resample)
+    if not isinstance(df1d.index, pd.DatetimeIndex):
+        try:
+            df1d = df1d.copy()
+            df1d.index = pd.to_datetime(df1d.index)
+        except Exception:
+            return empty
+
+    result = empty.copy()
+
+    # Weekly (W-FRI = أسبوع تداولي ينتهي الجمعة)
+    try:
+        weekly = df1d.resample('W-FRI').agg({'High': 'max', 'Low': 'min'}).dropna()
+        if len(weekly) >= 2:
+            result['pwh'] = float(weekly['High'].iloc[-2])
+            result['pwl'] = float(weekly['Low'].iloc[-2])
+    except Exception:
+        pass
+
+    # Monthly (ME = شهر ينتهي بنهاية الشهر التقويمي — pandas 2.2+)
+    try:
+        monthly = df1d.resample('ME').agg({'High': 'max', 'Low': 'min'}).dropna()
+        if len(monthly) >= 2:
+            result['pmh'] = float(monthly['High'].iloc[-2])
+            result['pml'] = float(monthly['Low'].iloc[-2])
+    except Exception:
+        pass
+
+    return result
