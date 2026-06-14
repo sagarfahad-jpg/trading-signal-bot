@@ -73,6 +73,8 @@ class SignalResult:
     eql_level: float = 0.0
     near_eqh:  bool  = False
     near_eql:  bool  = False
+    eqh_swept: bool  = False
+    eql_swept: bool  = False
     # ── Internal vs Swing Structure (LuxAlgo SMC #5) ─────────────────────
     swing_event:   str = ""   # 'BOS' | 'CHoCH' | 'MSS' | ''
     swing_bias:    str = ""   # 'bullish' | 'bearish' | ''
@@ -535,20 +537,32 @@ def quick_scan(symbol: str) -> Optional[dict]:
         if near_pml: bs += 3.5
         if near_pmh: ps += 3.5
 
-        # ── Equal Highs/Lows (EQH/EQL) — LuxAlgo SMC #3 ──────────────────
+        # ── Equal Highs/Lows (EQH/EQL) — LuxAlgo SMC #3 + Sweep State ────
         eq_levels = detect_equal_levels(df5, pivot_size=3,
                                         threshold_atr_mult=0.1,
-                                        atr_period=50)
+                                        atr_period=50,
+                                        track_sweep=True)
         eqh_level = eq_levels['eqh_level']
         eql_level = eq_levels['eql_level']
+        eqh_swept = eq_levels['eqh_swept']
+        eql_swept = eq_levels['eql_swept']
 
-        EQ_NEAR_TOL = 0.003   # 0.3% — أضيق من PDH (0.5%) لدقة مستوى EQ
+        EQ_NEAR_TOL = 0.003   # 0.3%
         near_eqh = eqh_level is not None and abs(price - eqh_level) / price < EQ_NEAR_TOL
         near_eql = eql_level is not None and abs(price - eql_level) / price < EQ_NEAR_TOL
 
-        # Scoring — سيولة مغناطيسية محلية
-        if near_eqh: ps += 2.0   # سيولة فوق → احتمال sweep + انعكاس هابط
-        if near_eql: bs += 2.0   # سيولة تحت → احتمال sweep + انعكاس صاعد
+        # Scoring — يميّز بين pending (سيولة كامنة) و swept (مستوى منقلب)
+        if near_eqh:
+            if eqh_swept:
+                bs += 1.5   # EQH مكسورة للأعلى → دعم الآن على إعادة الاختبار
+            else:
+                ps += 2.0   # EQH كامنة → هدف sweep هابط
+
+        if near_eql:
+            if eql_swept:
+                ps += 1.5   # EQL مكسورة للأسفل → مقاومة الآن على إعادة الاختبار
+            else:
+                bs += 2.0   # EQL كامنة → هدف sweep صاعد
         if bull_fvg:   bs += 1.5
         if bear_fvg:   ps += 1.5
         if bull_ob:    bs += 2.0
@@ -780,20 +794,32 @@ def analyze(
         if near_pml: bs += 3.5
         if near_pmh: ps += 3.5
 
-        # ── Equal Highs/Lows (EQH/EQL) — LuxAlgo SMC #3 ──────────────────
+        # ── Equal Highs/Lows (EQH/EQL) — LuxAlgo SMC #3 + Sweep State ────
         eq_levels = detect_equal_levels(df5, pivot_size=3,
                                         threshold_atr_mult=0.1,
-                                        atr_period=50)
+                                        atr_period=50,
+                                        track_sweep=True)
         eqh_level = eq_levels['eqh_level']
         eql_level = eq_levels['eql_level']
+        eqh_swept = eq_levels['eqh_swept']
+        eql_swept = eq_levels['eql_swept']
 
-        EQ_NEAR_TOL = 0.003   # 0.3% — أضيق من PDH (0.5%) لدقة مستوى EQ
+        EQ_NEAR_TOL = 0.003   # 0.3%
         near_eqh = eqh_level is not None and abs(price - eqh_level) / price < EQ_NEAR_TOL
         near_eql = eql_level is not None and abs(price - eql_level) / price < EQ_NEAR_TOL
 
-        # Scoring — سيولة مغناطيسية محلية
-        if near_eqh: ps += 2.0   # سيولة فوق → احتمال sweep + انعكاس هابط
-        if near_eql: bs += 2.0   # سيولة تحت → احتمال sweep + انعكاس صاعد
+        # Scoring — يميّز بين pending (سيولة كامنة) و swept (مستوى منقلب)
+        if near_eqh:
+            if eqh_swept:
+                bs += 1.5   # EQH مكسورة للأعلى → دعم الآن على إعادة الاختبار
+            else:
+                ps += 2.0   # EQH كامنة → هدف sweep هابط
+
+        if near_eql:
+            if eql_swept:
+                ps += 1.5   # EQL مكسورة للأسفل → مقاومة الآن على إعادة الاختبار
+            else:
+                bs += 2.0   # EQL كامنة → هدف sweep صاعد
 
         if bull_fvg:   bs += 1.5
         if bear_fvg:   ps += 1.5
@@ -1220,6 +1246,8 @@ def analyze(
             eql_level=float(eql_level) if eql_level else 0.0,
             near_eqh=bool(near_eqh),
             near_eql=bool(near_eql),
+            eqh_swept=bool(eqh_swept),
+            eql_swept=bool(eql_swept),
             swing_event=_swing_event or "",
             swing_bias=_swing_bias or "",
             alignment=alignment or "",

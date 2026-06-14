@@ -743,33 +743,31 @@ def prev_period_levels(df1d: pd.DataFrame) -> Dict:
 def detect_equal_levels(df: pd.DataFrame,
                         pivot_size: int = 3,
                         threshold_atr_mult: float = 0.1,
-                        atr_period: int = 50) -> Dict:
+                        atr_period: int = 50,
+                        track_sweep: bool = True) -> Dict:
     """
-    EQH/EQL — قمم/قيعان متساوية تقريباً (مناطق سيولة) — LuxAlgo SMC #3.
+    EQH/EQL — قمم/قيعان متساوية تقريباً مع تتبّع حالة الـ Sweep — LuxAlgo SMC #3.
 
-    منطق LuxAlgo:
-      • pivots بنافذة صغيرة (افتراضي 3)
-      • شرط المساواة: |pivot_جديد - pivot_سابق| < threshold × ATR
-      • يُرجع آخر زوج متساوٍ من كل نوع (EQH للقمم، EQL للقيعان)
-
-    Args:
-        df: DataFrame مع High/Low/Close
-        pivot_size: نافذة الـ pivot من كل جانب
-        threshold_atr_mult: العتبة كنسبة من ATR (0.1 = 10% من ATR)
-        atr_period: فترة ATR — 50 على df5 (LuxAlgo 200 لا يعمل بسبب n<200)
+    track_sweep=True (متَّسق مع #6 OB Mitigation و #7 FVG Inversion):
+      EQH يُصبح 'swept' إذا اخترق السعر فوق المستوى بعد آخر pivot في الزوج
+        → ينقلب من "مقاومة كامنة" إلى "دعم محتمل" عند إعادة الاختبار
+      EQL يُصبح 'swept' إذا اخترق السعر تحت المستوى بعد آخر pivot في الزوج
+        → ينقلب من "دعم كامن" إلى "مقاومة محتملة" عند إعادة الاختبار
 
     Returns:
         {
-            'eqh_level':    float | None,   # متوسط القمتين المتساويتين
-            'eqh_bars_ago': int   | None,   # كم شمعة على آخر pivot في الـ EQH
+            'eqh_level':    float | None,
+            'eqh_bars_ago': int | None,
+            'eqh_swept':    bool,
             'eql_level':    float | None,
-            'eql_bars_ago': int   | None,
+            'eql_bars_ago': int | None,
+            'eql_swept':    bool,
             'atr_used':     float,
         }
     """
     empty = {
-        'eqh_level': None, 'eqh_bars_ago': None,
-        'eql_level': None, 'eql_bars_ago': None,
+        'eqh_level': None, 'eqh_bars_ago': None, 'eqh_swept': False,
+        'eql_level': None, 'eql_bars_ago': None, 'eql_swept': False,
         'atr_used':  0.0,
     }
     n = len(df)
@@ -779,7 +777,6 @@ def detect_equal_levels(df: pd.DataFrame,
     highs = df['High'].values
     lows  = df['Low'].values
 
-    # ATR للعتبة
     atr_values = _calc_atr_series(df, period=atr_period)
     if len(atr_values) == 0:
         return empty
@@ -803,7 +800,7 @@ def detect_equal_levels(df: pd.DataFrame,
             if j != i
         )
 
-    pivot_highs = []  # [(level, bar_index), ...]
+    pivot_highs = []
     pivot_lows  = []
     for i in range(pivot_size, n - pivot_size):
         if _is_pivot_high(i):
@@ -811,32 +808,53 @@ def detect_equal_levels(df: pd.DataFrame,
         if _is_pivot_low(i):
             pivot_lows.append((float(lows[i]), i))
 
-    # EQH — آخر زوج قمم متساويتين (من النهاية للبداية)
-    eqh_level = None
+    # EQH detection
+    eqh_level    = None
     eqh_bars_ago = None
+    eqh_last_bar = None
     for k in range(len(pivot_highs) - 1, 0, -1):
         curr_level, curr_bar = pivot_highs[k]
         prev_level, _ = pivot_highs[k - 1]
         if abs(curr_level - prev_level) < threshold:
             eqh_level = (curr_level + prev_level) / 2.0
             eqh_bars_ago = n - 1 - curr_bar
+            eqh_last_bar = curr_bar
             break
 
-    # EQL — آخر زوج قيعان متساويتين
-    eql_level = None
+    # EQL detection
+    eql_level    = None
     eql_bars_ago = None
+    eql_last_bar = None
     for k in range(len(pivot_lows) - 1, 0, -1):
         curr_level, curr_bar = pivot_lows[k]
         prev_level, _ = pivot_lows[k - 1]
         if abs(curr_level - prev_level) < threshold:
             eql_level = (curr_level + prev_level) / 2.0
             eql_bars_ago = n - 1 - curr_bar
+            eql_last_bar = curr_bar
             break
+
+    # Sweep detection — مطابق للفلسفة المعمارية في #6+#7 (mitigation_source='highlow')
+    eqh_swept = False
+    eql_swept = False
+
+    if track_sweep:
+        if eqh_level is not None and eqh_last_bar is not None:
+            future_highs = highs[eqh_last_bar + 1:]
+            if len(future_highs) > 0 and future_highs.max() > eqh_level:
+                eqh_swept = True
+
+        if eql_level is not None and eql_last_bar is not None:
+            future_lows = lows[eql_last_bar + 1:]
+            if len(future_lows) > 0 and future_lows.min() < eql_level:
+                eql_swept = True
 
     return {
         'eqh_level':    eqh_level,
         'eqh_bars_ago': eqh_bars_ago,
+        'eqh_swept':    eqh_swept,
         'eql_level':    eql_level,
         'eql_bars_ago': eql_bars_ago,
+        'eql_swept':    eql_swept,
         'atr_used':     atr_now,
     }

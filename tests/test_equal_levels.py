@@ -86,3 +86,85 @@ def test_keys_always_present():
 
     for key in ('eqh_level', 'eqh_bars_ago', 'eql_level', 'eql_bars_ago', 'atr_used'):
         assert key in result
+
+
+# ── Sweep state tracking (architectural consistency with #6+#7) ────────────
+
+def _eqh_setup(n: int = 100):
+    """Helper: قمَّتَان متطابقتان عند 110 على ramp ثابت."""
+    highs  = [100.0 + i * 0.001 for i in range(n)]
+    lows   = [99.0  + i * 0.001 for i in range(n)]
+    closes = [99.5  + i * 0.001 for i in range(n)]
+    highs[40] = 110.0
+    highs[60] = 110.05
+    return highs, lows, closes
+
+
+def _eql_setup(n: int = 100):
+    """Helper: قاعَيْن متطابقَيْن عند 90 على ramp ثابت."""
+    highs  = [101.0 + i * 0.001 for i in range(n)]
+    lows   = [99.0  + i * 0.001 for i in range(n)]
+    closes = [100.0 + i * 0.001 for i in range(n)]
+    lows[40] = 90.0
+    lows[60] = 90.05
+    return highs, lows, closes
+
+
+def test_eqh_marked_swept_when_price_exceeds():
+    """EQH مكتشفة + شموع لاحقة تخترق المستوى → eqh_swept=True."""
+    n = 100
+    highs, lows, closes = _eqh_setup(n)
+    # شموع لاحقة تخترق فوق 110 (sweep) — ramp تصاعدي يمنع تكوّن pivots جديدة
+    for j in range(70, 80):
+        highs[j] = 111.0 + (j - 70) * 0.1
+
+    df = make_df(highs, lows, closes)
+    result = detect_equal_levels(df, pivot_size=3, threshold_atr_mult=0.1, atr_period=50)
+
+    assert result['eqh_level'] is not None
+    assert result['eqh_swept'] is True, f"Expected swept=True, got: {result}"
+
+
+def test_eqh_not_swept_when_price_stays_below():
+    """EQH مكتشفة + السعر لم يتجاوز → eqh_swept=False."""
+    n = 100
+    highs, lows, closes = _eqh_setup(n)
+    # شموع لاحقة تبقى تحت 110 (لا sweep)
+    for j in range(70, 80):
+        highs[j] = 105.0   # أقل من eqh_level
+
+    df = make_df(highs, lows, closes)
+    result = detect_equal_levels(df, pivot_size=3, threshold_atr_mult=0.1, atr_period=50)
+
+    assert result['eqh_level'] is not None
+    assert result['eqh_swept'] is False, f"Expected swept=False, got: {result}"
+
+
+def test_eql_marked_swept_when_price_drops_below():
+    """EQL مكتشفة + شموع لاحقة تنزل تحت المستوى → eql_swept=True."""
+    n = 100
+    highs, lows, closes = _eql_setup(n)
+    # ramp تنازلي لمنع تكوّن pivots جديدة
+    for j in range(70, 80):
+        lows[j] = 89.0 - (j - 70) * 0.1
+
+    df = make_df(highs, lows, closes)
+    result = detect_equal_levels(df, pivot_size=3, threshold_atr_mult=0.1, atr_period=50)
+
+    assert result['eql_level'] is not None
+    assert result['eql_swept'] is True
+
+
+def test_track_sweep_disabled():
+    """track_sweep=False → swept دائماً False (backward compat)."""
+    n = 100
+    highs, lows, closes = _eqh_setup(n)
+    for j in range(70, 80):
+        highs[j] = 115.0 + (j - 70) * 0.1  # sweep واضح لكن track_sweep=False
+
+    df = make_df(highs, lows, closes)
+    result = detect_equal_levels(df, pivot_size=3, threshold_atr_mult=0.1,
+                                 atr_period=50, track_sweep=False)
+
+    assert result['eqh_swept'] is False
+    assert result['eql_swept'] is False
