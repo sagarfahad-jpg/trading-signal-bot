@@ -736,3 +736,107 @@ def prev_period_levels(df1d: pd.DataFrame) -> Dict:
         pass
 
     return result
+
+
+# ─── Equal Highs/Lows (EQH/EQL) — LuxAlgo SMC #3 ────────────────────────────
+
+def detect_equal_levels(df: pd.DataFrame,
+                        pivot_size: int = 3,
+                        threshold_atr_mult: float = 0.1,
+                        atr_period: int = 50) -> Dict:
+    """
+    EQH/EQL — قمم/قيعان متساوية تقريباً (مناطق سيولة) — LuxAlgo SMC #3.
+
+    منطق LuxAlgo:
+      • pivots بنافذة صغيرة (افتراضي 3)
+      • شرط المساواة: |pivot_جديد - pivot_سابق| < threshold × ATR
+      • يُرجع آخر زوج متساوٍ من كل نوع (EQH للقمم، EQL للقيعان)
+
+    Args:
+        df: DataFrame مع High/Low/Close
+        pivot_size: نافذة الـ pivot من كل جانب
+        threshold_atr_mult: العتبة كنسبة من ATR (0.1 = 10% من ATR)
+        atr_period: فترة ATR — 50 على df5 (LuxAlgo 200 لا يعمل بسبب n<200)
+
+    Returns:
+        {
+            'eqh_level':    float | None,   # متوسط القمتين المتساويتين
+            'eqh_bars_ago': int   | None,   # كم شمعة على آخر pivot في الـ EQH
+            'eql_level':    float | None,
+            'eql_bars_ago': int   | None,
+            'atr_used':     float,
+        }
+    """
+    empty = {
+        'eqh_level': None, 'eqh_bars_ago': None,
+        'eql_level': None, 'eql_bars_ago': None,
+        'atr_used':  0.0,
+    }
+    n = len(df)
+    if n < pivot_size * 2 + 2:
+        return empty
+
+    highs = df['High'].values
+    lows  = df['Low'].values
+
+    # ATR للعتبة
+    atr_values = _calc_atr_series(df, period=atr_period)
+    if len(atr_values) == 0:
+        return empty
+    atr_now = float(atr_values[-1])
+    if atr_now <= 0:
+        return empty
+
+    threshold = atr_now * threshold_atr_mult
+
+    def _is_pivot_high(i):
+        return all(
+            highs[i] >= highs[j]
+            for j in range(i - pivot_size, i + pivot_size + 1)
+            if j != i
+        )
+
+    def _is_pivot_low(i):
+        return all(
+            lows[i] <= lows[j]
+            for j in range(i - pivot_size, i + pivot_size + 1)
+            if j != i
+        )
+
+    pivot_highs = []  # [(level, bar_index), ...]
+    pivot_lows  = []
+    for i in range(pivot_size, n - pivot_size):
+        if _is_pivot_high(i):
+            pivot_highs.append((float(highs[i]), i))
+        if _is_pivot_low(i):
+            pivot_lows.append((float(lows[i]), i))
+
+    # EQH — آخر زوج قمم متساويتين (من النهاية للبداية)
+    eqh_level = None
+    eqh_bars_ago = None
+    for k in range(len(pivot_highs) - 1, 0, -1):
+        curr_level, curr_bar = pivot_highs[k]
+        prev_level, _ = pivot_highs[k - 1]
+        if abs(curr_level - prev_level) < threshold:
+            eqh_level = (curr_level + prev_level) / 2.0
+            eqh_bars_ago = n - 1 - curr_bar
+            break
+
+    # EQL — آخر زوج قيعان متساويتين
+    eql_level = None
+    eql_bars_ago = None
+    for k in range(len(pivot_lows) - 1, 0, -1):
+        curr_level, curr_bar = pivot_lows[k]
+        prev_level, _ = pivot_lows[k - 1]
+        if abs(curr_level - prev_level) < threshold:
+            eql_level = (curr_level + prev_level) / 2.0
+            eql_bars_ago = n - 1 - curr_bar
+            break
+
+    return {
+        'eqh_level':    eqh_level,
+        'eqh_bars_ago': eqh_bars_ago,
+        'eql_level':    eql_level,
+        'eql_bars_ago': eql_bars_ago,
+        'atr_used':     atr_now,
+    }

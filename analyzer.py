@@ -68,6 +68,11 @@ class SignalResult:
     near_pwl:  bool  = False
     near_pmh:  bool  = False
     near_pml:  bool  = False
+    # ── Equal Highs/Lows (LuxAlgo SMC #3) ───────────────────────────────
+    eqh_level: float = 0.0
+    eql_level: float = 0.0
+    near_eqh:  bool  = False
+    near_eql:  bool  = False
     # ── Internal vs Swing Structure (LuxAlgo SMC #5) ─────────────────────
     swing_event:   str = ""   # 'BOS' | 'CHoCH' | 'MSS' | ''
     swing_bias:    str = ""   # 'bullish' | 'bearish' | ''
@@ -131,6 +136,7 @@ from market_structure import (
     _pivot_levels, _find_fvg, _find_order_blocks,
     detect_structure_events, detect_pd_zones_mtf,
     detect_structure_dual, prev_period_levels,
+    detect_equal_levels,
 )
 
 
@@ -528,6 +534,21 @@ def quick_scan(symbol: str) -> Optional[dict]:
         if near_pwh: ps += 3.0
         if near_pml: bs += 3.5
         if near_pmh: ps += 3.5
+
+        # ── Equal Highs/Lows (EQH/EQL) — LuxAlgo SMC #3 ──────────────────
+        eq_levels = detect_equal_levels(df5, pivot_size=3,
+                                        threshold_atr_mult=0.1,
+                                        atr_period=50)
+        eqh_level = eq_levels['eqh_level']
+        eql_level = eq_levels['eql_level']
+
+        EQ_NEAR_TOL = 0.003   # 0.3% — أضيق من PDH (0.5%) لدقة مستوى EQ
+        near_eqh = eqh_level is not None and abs(price - eqh_level) / price < EQ_NEAR_TOL
+        near_eql = eql_level is not None and abs(price - eql_level) / price < EQ_NEAR_TOL
+
+        # Scoring — سيولة مغناطيسية محلية
+        if near_eqh: ps += 2.0   # سيولة فوق → احتمال sweep + انعكاس هابط
+        if near_eql: bs += 2.0   # سيولة تحت → احتمال sweep + انعكاس صاعد
         if bull_fvg:   bs += 1.5
         if bear_fvg:   ps += 1.5
         if bull_ob:    bs += 2.0
@@ -758,6 +779,21 @@ def analyze(
         if near_pwh: ps += 3.0
         if near_pml: bs += 3.5
         if near_pmh: ps += 3.5
+
+        # ── Equal Highs/Lows (EQH/EQL) — LuxAlgo SMC #3 ──────────────────
+        eq_levels = detect_equal_levels(df5, pivot_size=3,
+                                        threshold_atr_mult=0.1,
+                                        atr_period=50)
+        eqh_level = eq_levels['eqh_level']
+        eql_level = eq_levels['eql_level']
+
+        EQ_NEAR_TOL = 0.003   # 0.3% — أضيق من PDH (0.5%) لدقة مستوى EQ
+        near_eqh = eqh_level is not None and abs(price - eqh_level) / price < EQ_NEAR_TOL
+        near_eql = eql_level is not None and abs(price - eql_level) / price < EQ_NEAR_TOL
+
+        # Scoring — سيولة مغناطيسية محلية
+        if near_eqh: ps += 2.0   # سيولة فوق → احتمال sweep + انعكاس هابط
+        if near_eql: bs += 2.0   # سيولة تحت → احتمال sweep + انعكاس صاعد
 
         if bull_fvg:   bs += 1.5
         if bear_fvg:   ps += 1.5
@@ -1180,6 +1216,10 @@ def analyze(
             near_pwl=bool(near_pwl),
             near_pmh=bool(near_pmh),
             near_pml=bool(near_pml),
+            eqh_level=float(eqh_level) if eqh_level else 0.0,
+            eql_level=float(eql_level) if eql_level else 0.0,
+            near_eqh=bool(near_eqh),
+            near_eql=bool(near_eql),
             swing_event=_swing_event or "",
             swing_bias=_swing_bias or "",
             alignment=alignment or "",
