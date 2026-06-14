@@ -858,3 +858,141 @@ def detect_equal_levels(df: pd.DataFrame,
         'eql_swept':    eql_swept,
         'atr_used':     atr_now,
     }
+
+
+# ─── OTE Setup (Optimal Trade Entry — ICT) ──────────────────────────────────
+
+def detect_ote_setup(df: pd.DataFrame,
+                     ms_dual: Dict,
+                     min_leg_atr_mult: float = 2.0,
+                     atr_period: int = 50,
+                     golden_tolerance: float = 0.005) -> Dict:
+    """
+    يكتشف OTE setup كاملاً (Active + Inverse) — ICT methodology.
+
+    آلية الـ leg:
+      • bias من ms_dual['swing']['current_bias'] + شرط BOS/MSS
+      • Bullish: leg_start=strong_low (or trailing_bottom) → leg_end=trailing_top
+      • Bearish: leg_start=strong_high (or trailing_top) → leg_end=trailing_bottom
+      • leg_length > min_leg_atr_mult × ATR(atr_period)
+
+    OTE Zone (61.8%-79% Fib):
+      • Bullish retracement: zone = [leg_end - 0.79·len, leg_end - 0.618·len]
+      • Bearish retracement: zone = [leg_end + 0.618·len, leg_end + 0.79·len]
+      • Golden Pocket = 70.5%
+
+    Inverse OTE:
+      • Bullish setup يصبح inverse عند كسر 79% (price تحت ote_zone_low)
+        → setup ينقلب → احتمال PUT عند ارتداد من inverse_zone
+      • Bearish setup يصبح inverse عند كسر 79% (price فوق ote_zone_high)
+    """
+    empty = {
+        'has_setup': False, 'direction': None,
+        'leg_start': None, 'leg_end': None, 'leg_length': None, 'leg_event': None,
+        'ote_zone_low': None, 'ote_zone_high': None, 'golden_pocket': None,
+        'in_ote': False, 'in_golden': False,
+        'inverse_active': False, 'inverse_zone_low': None, 'inverse_zone_high': None,
+        'in_inverse': False,
+        'atr_used': 0.0,
+    }
+
+    if df is None or len(df) < 20 or not ms_dual:
+        return empty
+
+    # 1) استخراج الـ bias والـ event من swing layer
+    swing = ms_dual.get('swing', {})
+    bias = swing.get('current_bias')
+    event = swing.get('last_event')
+    strength = swing.get('strength', {}) or {}
+
+    if bias not in ('bullish', 'bearish'):
+        return empty
+
+    # شرط الـ event الإلزامي: BOS أو MSS فقط
+    if event not in ('BOS', 'MSS'):
+        return empty
+
+    # 2) ATR للفلتر
+    atr_values = _calc_atr_series(df, period=atr_period)
+    if len(atr_values) == 0:
+        return empty
+    atr_now = float(atr_values[-1])
+    if atr_now <= 0:
+        return empty
+
+    # 3) تعريف الـ leg
+    if bias == 'bullish':
+        leg_start = strength.get('strong_low') or strength.get('trailing_bottom')
+        leg_end   = strength.get('trailing_top')
+    else:
+        leg_start = strength.get('strong_high') or strength.get('trailing_top')
+        leg_end   = strength.get('trailing_bottom')
+
+    if leg_start is None or leg_end is None:
+        return empty
+
+    leg_length = abs(leg_end - leg_start)
+
+    # 4) شرط الـ leg الدافع
+    if leg_length < min_leg_atr_mult * atr_now:
+        return empty
+
+    # 5) حساب OTE zone
+    price = float(df['Close'].iloc[-1])
+
+    if bias == 'bullish':
+        ote_zone_high = leg_end - leg_length * 0.618
+        ote_zone_low  = leg_end - leg_length * 0.79
+        golden_pocket = leg_end - leg_length * 0.705
+
+        in_ote    = ote_zone_low <= price <= ote_zone_high
+        in_golden = abs(price - golden_pocket) / price < golden_tolerance if price > 0 else False
+
+        lows_after_leg = df['Low'].values
+        inverse_active = bool(lows_after_leg.min() < ote_zone_low) if len(lows_after_leg) > 0 else False
+
+        if inverse_active:
+            inverse_zone_low  = min(leg_start, ote_zone_low)
+            inverse_zone_high = max(leg_start, ote_zone_low)
+            in_inverse = inverse_zone_low <= price <= inverse_zone_high
+        else:
+            inverse_zone_low = inverse_zone_high = None
+            in_inverse = False
+
+    else:  # bearish
+        ote_zone_low  = leg_end + leg_length * 0.618
+        ote_zone_high = leg_end + leg_length * 0.79
+        golden_pocket = leg_end + leg_length * 0.705
+
+        in_ote    = ote_zone_low <= price <= ote_zone_high
+        in_golden = abs(price - golden_pocket) / price < golden_tolerance if price > 0 else False
+
+        highs_after_leg = df['High'].values
+        inverse_active = bool(highs_after_leg.max() > ote_zone_high) if len(highs_after_leg) > 0 else False
+
+        if inverse_active:
+            inverse_zone_low  = min(leg_start, ote_zone_high)
+            inverse_zone_high = max(leg_start, ote_zone_high)
+            in_inverse = inverse_zone_low <= price <= inverse_zone_high
+        else:
+            inverse_zone_low = inverse_zone_high = None
+            in_inverse = False
+
+    return {
+        'has_setup':         True,
+        'direction':         bias,
+        'leg_start':         float(leg_start),
+        'leg_end':           float(leg_end),
+        'leg_length':        float(leg_length),
+        'leg_event':         event,
+        'ote_zone_low':      float(ote_zone_low),
+        'ote_zone_high':     float(ote_zone_high),
+        'golden_pocket':     float(golden_pocket),
+        'in_ote':            bool(in_ote),
+        'in_golden':         bool(in_golden),
+        'inverse_active':    bool(inverse_active),
+        'inverse_zone_low':  float(inverse_zone_low) if inverse_zone_low is not None else None,
+        'inverse_zone_high': float(inverse_zone_high) if inverse_zone_high is not None else None,
+        'in_inverse':        bool(in_inverse),
+        'atr_used':          atr_now,
+    }

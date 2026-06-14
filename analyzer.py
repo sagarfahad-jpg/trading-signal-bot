@@ -75,6 +75,15 @@ class SignalResult:
     near_eql:  bool  = False
     eqh_swept: bool  = False
     eql_swept: bool  = False
+    # ── OTE Setup (Optimal Trade Entry — ICT) ────────────────────────────
+    ote_active:        bool  = False
+    ote_direction:     str   = ""        # 'bullish' | 'bearish' | ''
+    ote_leg_start:     float = 0.0
+    ote_leg_end:       float = 0.0
+    ote_golden_pocket: float = 0.0
+    in_ote:            bool  = False
+    in_golden_pocket:  bool  = False
+    inverse_ote:       bool  = False
     # ── Internal vs Swing Structure (LuxAlgo SMC #5) ─────────────────────
     swing_event:   str = ""   # 'BOS' | 'CHoCH' | 'MSS' | ''
     swing_bias:    str = ""   # 'bullish' | 'bearish' | ''
@@ -138,7 +147,7 @@ from market_structure import (
     _pivot_levels, _find_fvg, _find_order_blocks,
     detect_structure_events, detect_pd_zones_mtf,
     detect_structure_dual, prev_period_levels,
-    detect_equal_levels,
+    detect_equal_levels, detect_ote_setup,
 )
 
 
@@ -909,6 +918,35 @@ def analyze(
         if _swing_bias == 'bearish':   bs -= 1.2
         elif _swing_bias == 'bullish': ps -= 1.2
 
+        # ── OTE Setup (Optimal Trade Entry — ICT) ──────────────────────────
+        ote = detect_ote_setup(df5, ms_dual,
+                               min_leg_atr_mult=2.0,
+                               atr_period=50,
+                               golden_tolerance=0.005)
+
+        ote_active    = ote['has_setup']
+        ote_direction = ote['direction'] or ''
+        in_ote        = ote['in_ote']
+        in_golden     = ote['in_golden']
+        in_inverse    = ote['in_inverse']
+
+        # Scoring — Active OTE
+        if ote_active:
+            if ote_direction == 'bullish':
+                if in_golden:
+                    bs += 2.5   # Golden Pocket (sweet spot)
+                elif in_ote:
+                    bs += 1.5   # OTE zone
+                elif in_inverse:
+                    ps += 2.0   # Inverse OTE → reversal setup للـ PUT
+            elif ote_direction == 'bearish':
+                if in_golden:
+                    ps += 2.5
+                elif in_ote:
+                    ps += 1.5
+                elif in_inverse:
+                    bs += 2.0   # Inverse OTE → reversal setup للـ CALL
+
         # ── Strong/Weak Highs & Lows (LuxAlgo SMC #4) ────────────────────
         strength = ms.get('strength', {})
         strong_h = strength.get('strong_high')
@@ -1248,6 +1286,14 @@ def analyze(
             near_eql=bool(near_eql),
             eqh_swept=bool(eqh_swept),
             eql_swept=bool(eql_swept),
+            ote_active=bool(ote_active),
+            ote_direction=ote_direction,
+            ote_leg_start=float(ote['leg_start']) if ote['leg_start'] else 0.0,
+            ote_leg_end=float(ote['leg_end']) if ote['leg_end'] else 0.0,
+            ote_golden_pocket=float(ote['golden_pocket']) if ote['golden_pocket'] else 0.0,
+            in_ote=bool(in_ote),
+            in_golden_pocket=bool(in_golden),
+            inverse_ote=bool(in_inverse),
             swing_event=_swing_event or "",
             swing_bias=_swing_bias or "",
             alignment=alignment or "",

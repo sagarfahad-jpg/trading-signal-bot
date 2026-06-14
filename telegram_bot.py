@@ -119,6 +119,21 @@ def format_message(s: SignalResult) -> str:
             f"Internal {inter_e}/{inter_b} — {align_label}\n"
         )
 
+    # ── OTE Setup line ────────────────────────────────────────────────────
+    ote_line = ""
+    if getattr(s, 'ote_active', False):
+        direction_ar = 'صاعد' if s.ote_direction == 'bullish' else 'هابط'
+        if getattr(s, 'inverse_ote', False):
+            state_label = '⚠️ Inverse'
+        elif getattr(s, 'in_golden_pocket', False):
+            state_label = '✨ Golden Pocket'
+        elif getattr(s, 'in_ote', False):
+            state_label = '🎯 OTE'
+        else:
+            state_label = '⏳ ينتظر'
+        leg_info = f"{s.ote_leg_start:.2f}→{s.ote_leg_end:.2f}"
+        ote_line = f"🎯 OTE ({direction_ar}): {state_label} | leg {leg_info}\n"
+
     # ── سطر التحقق: سعر السهم + الوقت الدقيق (لمطابقة السعر من منصتك) ─────────
     try:
         import pytz as _pytz
@@ -149,6 +164,7 @@ def format_message(s: SignalResult) -> str:
         f"💠 الهدف الثاني: {s.target2:.2f}\n"
         f"📊 R:R = {s.rr:.2f}  |  Score: {s.score:.1f}★  |  MTF: {s.mtf_score}/3\n"
         f"{structure_line}"
+        f"{ote_line}"
         f"{mtf_warn}"
         f"{scalp_line}"
         f"{vwap_line}"
