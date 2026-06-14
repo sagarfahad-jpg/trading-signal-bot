@@ -37,34 +37,103 @@ def _pivot_levels(df: pd.DataFrame, lookback: int = 5) -> Tuple[List[float], Lis
     return highs, lows
 
 
-def _find_fvg(df: pd.DataFrame, limit: int = 10) -> List[Tuple[float, float, str]]:
-    """فجوات القيمة العادلة (FVG) — يُرجع آخر `limit` فجوة."""
+def _find_fvg(df: pd.DataFrame,
+              limit: int = 10,
+              track_mitigation: bool = True,
+              mitigation_source: str = 'highlow') -> List[Tuple[float, float, str]]:
+    """
+    فجوات القيمة العادلة (FVG) مع تتبّع الـ Mitigation (LuxAlgo SMC #7).
+
+    track_mitigation=True (default):
+      Bullish FVG تُملأ إذا نزل السعر تحت bottom (c0_high)
+        → تُحوَّل إلى 'supply' (Inversion FVG → مقاومة)
+      Bearish FVG تُملأ إذا صعد السعر فوق top (c0_low)
+        → تُحوَّل إلى 'demand' (Inversion FVG → دعم)
+
+    Returns: List of (low, high, type) tuples where type is one of:
+      'bullish', 'bearish', 'demand', 'supply'
+    """
     fvgs = []
-    for i in range(2, len(df)):
-        c0_h, c0_l = df['High'].iloc[i - 2], df['Low'].iloc[i - 2]
-        c2_h, c2_l = df['High'].iloc[i],     df['Low'].iloc[i]
+    n = len(df)
+    highs  = df['High'].values
+    lows   = df['Low'].values
+    closes = df['Close'].values
+
+    for i in range(2, n):
+        c0_h, c0_l = float(highs[i - 2]), float(lows[i - 2])
+        c2_h, c2_l = float(highs[i]),     float(lows[i])
+
         if c2_l > c0_h:
-            fvgs.append((float(c0_h), float(c2_l), 'bullish'))
+            # Bullish FVG: bottom=c0_h, top=c2_l
+            fvg_type = 'bullish'
+            if track_mitigation and i + 1 < n:
+                check_src = lows[i + 1:] if mitigation_source == 'highlow' else closes[i + 1:]
+                if len(check_src) > 0 and check_src.min() < c0_h:
+                    fvg_type = 'supply'  # ملئت → انقلبت إلى مقاومة
+            fvgs.append((c0_h, c2_l, fvg_type))
+
         elif c2_h < c0_l:
-            fvgs.append((float(c2_h), float(c0_l), 'bearish'))
+            # Bearish FVG: bottom=c2_h, top=c0_l
+            fvg_type = 'bearish'
+            if track_mitigation and i + 1 < n:
+                check_src = highs[i + 1:] if mitigation_source == 'highlow' else closes[i + 1:]
+                if len(check_src) > 0 and check_src.max() > c0_l:
+                    fvg_type = 'demand'  # ملئت → انقلبت إلى دعم
+            fvgs.append((c2_h, c0_l, fvg_type))
+
     return fvgs[-limit:]
 
 
-def _find_order_blocks(df: pd.DataFrame, limit: int = 10) -> List[Tuple[float, float, str]]:
-    """مناطق Order Blocks — يُرجع آخر `limit` كتلة."""
+def _find_order_blocks(df: pd.DataFrame,
+                      limit: int = 10,
+                      track_mitigation: bool = True,
+                      mitigation_source: str = 'highlow') -> List[Tuple[float, float, str]]:
+    """
+    مناطق Order Blocks مع تتبّع الـ Mitigation (LuxAlgo SMC #6 + ICT Breaker).
+
+    track_mitigation=True (default):
+      Bullish OB يُخترق إذا نزل السعر تحت ob_low بعد +5 شموع من التكوين
+        → يُحوَّل إلى 'breaker_bear' (مقاومة)
+      Bearish OB يُخترق إذا صعد السعر فوق ob_high بعد +5 شموع
+        → يُحوَّل إلى 'breaker_bull' (دعم)
+
+    Returns: List of (low, high, type) tuples where type is one of:
+      'bullish', 'bearish', 'breaker_bull', 'breaker_bear'
+    """
     obs = []
-    for i in range(1, len(df) - 4):
-        c    = df.iloc[i]
-        span = float(c['High'] - c['Low'])
+    n = len(df)
+    highs  = df['High'].values
+    lows   = df['Low'].values
+    closes = df['Close'].values
+    opens  = df['Open'].values
+
+    for i in range(1, n - 4):
+        ob_low, ob_high = float(lows[i]), float(highs[i])
+        span = ob_high - ob_low
         if span == 0:
             continue
         following = df.iloc[i + 1: i + 5]
-        if c['Close'] < c['Open']:
-            if (following['Close'].max() - c['Low']) > span * 2.0:
-                obs.append((float(c['Low']), float(c['High']), 'bullish'))
-        elif c['Close'] > c['Open']:
-            if (c['High'] - following['Close'].min()) > span * 2.0:
-                obs.append((float(c['Low']), float(c['High']), 'bearish'))
+
+        if closes[i] < opens[i]:
+            # مرشّح Bullish OB
+            if (following['Close'].max() - ob_low) > span * 2.0:
+                ob_type = 'bullish'
+                if track_mitigation and i + 5 < n:
+                    check_src = lows[i + 5:] if mitigation_source == 'highlow' else closes[i + 5:]
+                    if len(check_src) > 0 and check_src.min() < ob_low:
+                        ob_type = 'breaker_bear'  # كان دعم → كُسر → مقاومة
+                obs.append((ob_low, ob_high, ob_type))
+
+        elif closes[i] > opens[i]:
+            # مرشّح Bearish OB
+            if (ob_high - following['Close'].min()) > span * 2.0:
+                ob_type = 'bearish'
+                if track_mitigation and i + 5 < n:
+                    check_src = highs[i + 5:] if mitigation_source == 'highlow' else closes[i + 5:]
+                    if len(check_src) > 0 and check_src.max() > ob_high:
+                        ob_type = 'breaker_bull'  # كان مقاومة → كُسر → دعم
+                obs.append((ob_low, ob_high, ob_type))
+
     return obs[-limit:]
 
 

@@ -59,7 +59,9 @@ def _zones_from_df(df: pd.DataFrame, timeframe: str, strength: float) -> List[HT
 
     recent = df.tail(80)
 
-    for lo, hi, fvg_type in _find_fvg(recent):
+    # نمرّر track_mitigation=False لإبقاء HTF يستخدم النوع الأصلي فقط.
+    # الـ inversions في HTF تُكتشف عبر _find_inversion_fvgs أدناه (منطق منفصل).
+    for lo, hi, fvg_type in _find_fvg(recent, track_mitigation=False):
         direction = 'demand' if fvg_type == 'bullish' else 'supply'
         zones.append(HTFZone(
             low=round(lo, 4), high=round(hi, 4),
@@ -67,7 +69,7 @@ def _zones_from_df(df: pd.DataFrame, timeframe: str, strength: float) -> List[HT
             timeframe=timeframe, strength=strength,
         ))
 
-    for lo, hi, ob_type in _find_order_blocks(recent):
+    for lo, hi, ob_type in _find_order_blocks(recent, track_mitigation=False):
         direction = 'demand' if ob_type == 'bullish' else 'supply'
         zones.append(HTFZone(
             low=round(lo, 4), high=round(hi, 4),

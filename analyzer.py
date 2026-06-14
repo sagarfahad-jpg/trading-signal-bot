@@ -150,28 +150,6 @@ def _rsi_divergence(df: pd.DataFrame, lookback: int = 30) -> Tuple[bool, bool]:
     return bool(bull), bool(bear)
 
 
-def _find_breakers(df: pd.DataFrame, price: float) -> Tuple[bool, bool]:
-    """
-    Breaker Block (ICT) — Order Block انكسر وتحوّل لمستوى معاكس:
-    bull_breaker : OB هابط اخترقه السعر للأعلى → صار دعماً (CALL)
-    bear_breaker : OB صاعد اخترقه السعر للأسفل → صار مقاومة (PUT)
-    """
-    obs         = _find_order_blocks(df)
-    prox        = 0.007        # 0.7% قرب من المستوى
-    bull_break  = bear_break = False
-
-    for lo, hi, ob_type in obs:
-        if ob_type == 'bearish' and price > hi:
-            # OB هابط انكسر للأعلى → أصبح دعم
-            if abs(price - hi) / price < prox:
-                bull_break = True
-        elif ob_type == 'bullish' and price < lo:
-            # OB صاعد انكسر للأسفل → أصبح مقاومة
-            if abs(price - lo) / price < prox:
-                bear_break = True
-    return bull_break, bear_break
-
-
 def _liquidity_sweep(df: pd.DataFrame, lookback: int = 40) -> Tuple[bool, bool]:
     """
     Liquidity Sweep (ICT Stop Hunt) — السعر يمسح الـ Stops ثم ينعكس:
@@ -487,13 +465,31 @@ def quick_scan(symbol: str) -> Optional[dict]:
         at_res   = abs(price - near_res) / price < 0.004
         near_pdl = abs(price - pdl)     / price < 0.005
         near_pdh = abs(price - pdh)     / price < 0.005
+
+        # OB نشطة (لم تُخترق)
+        bull_ob = any(lo <= price <= hi * 1.003 for lo, hi, t in obs if t == 'bullish')
+        bear_ob = any(lo * 0.997 <= price <= hi  for lo, hi, t in obs if t == 'bearish')
+
+        # Breakers (OBs مخترقة + السعر قرب المستوى المعكوس)
+        PROX_BREAK = 0.007
+        bull_break = any(
+            abs(price - hi) / price < PROX_BREAK and price > hi
+            for lo, hi, t in obs if t == 'breaker_bull'
+        )
+        bear_break = any(
+            abs(price - lo) / price < PROX_BREAK and price < lo
+            for lo, hi, t in obs if t == 'breaker_bear'
+        )
+
+        # FVG نشطة (لم تُملأ)
         bull_fvg = any(lo <= price <= hi for lo, hi, t in fvgs if t == 'bullish')
         bear_fvg = any(lo <= price <= hi for lo, hi, t in fvgs if t == 'bearish')
-        bull_ob  = any(lo <= price <= hi * 1.003 for lo, hi, t in obs if t == 'bullish')
-        bear_ob  = any(lo * 0.997 <= price <= hi  for lo, hi, t in obs if t == 'bearish')
+
+        # Inversion FVGs (مملوءة + معكوسة)
+        inv_demand = any(lo <= price <= hi for lo, hi, t in fvgs if t == 'demand')
+        inv_supply = any(lo <= price <= hi for lo, hi, t in fvgs if t == 'supply')
 
         bull_div,   bear_div   = _rsi_divergence(df5)
-        bull_break, bear_break = _find_breakers(recent, price)
         bull_sweep, bear_sweep = _liquidity_sweep(df5)
 
         bs = ps = 0.0
@@ -513,6 +509,9 @@ def quick_scan(symbol: str) -> Optional[dict]:
         if bear_div:   ps += 2.5
         if bull_break: bs += 1.5
         if bear_break: ps += 1.5
+        # Inversion FVG bonus (أقل من OB العادي +2.0 لأنها مستوى ثانوي)
+        if inv_demand: bs += 1.0
+        if inv_supply: ps += 1.0
         if bull_sweep: bs += 1.5
         if bear_sweep: ps += 1.5
         if price > sma10 and price > sma30: bs += 0.5
@@ -667,14 +666,31 @@ def analyze(
         near_pdl = abs(price - pdl)     / price < 0.005
         near_pdh = abs(price - pdh)     / price < 0.005
 
+        # OB نشطة (لم تُخترق)
+        bull_ob = any(lo <= price <= hi * 1.003 for lo, hi, t in obs if t == 'bullish')
+        bear_ob = any(lo * 0.997 <= price <= hi  for lo, hi, t in obs if t == 'bearish')
+
+        # Breakers (OBs مخترقة + السعر قرب المستوى المعكوس)
+        PROX_BREAK = 0.007
+        bull_break = any(
+            abs(price - hi) / price < PROX_BREAK and price > hi
+            for lo, hi, t in obs if t == 'breaker_bull'
+        )
+        bear_break = any(
+            abs(price - lo) / price < PROX_BREAK and price < lo
+            for lo, hi, t in obs if t == 'breaker_bear'
+        )
+
+        # FVG نشطة (لم تُملأ)
         bull_fvg = any(lo <= price <= hi for lo, hi, t in fvgs if t == 'bullish')
         bear_fvg = any(lo <= price <= hi for lo, hi, t in fvgs if t == 'bearish')
-        bull_ob  = any(lo <= price <= hi * 1.003 for lo, hi, t in obs if t == 'bullish')
-        bear_ob  = any(lo * 0.997 <= price <= hi  for lo, hi, t in obs if t == 'bearish')
+
+        # Inversion FVGs (مملوءة + معكوسة)
+        inv_demand = any(lo <= price <= hi for lo, hi, t in fvgs if t == 'demand')
+        inv_supply = any(lo <= price <= hi for lo, hi, t in fvgs if t == 'supply')
 
         # ── مفاهيم ICT المتقدمة ───────────────────────────────────────────────
         bull_div,   bear_div   = _rsi_divergence(df5)
-        bull_break, bear_break = _find_breakers(recent, price)
         bull_sweep, bear_sweep = _liquidity_sweep(df5)
 
         # ── VWAP ──────────────────────────────────────────────────────────────
@@ -710,6 +726,10 @@ def analyze(
         # Breaker Block — مستوى ICT مقلوب
         if bull_break: bs += 1.5
         if bear_break: ps += 1.5
+
+        # Inversion FVG bonus (أقل من OB العادي +2.0 لأنها مستوى ثانوي)
+        if inv_demand: bs += 1.0
+        if inv_supply: ps += 1.0
 
         # Liquidity Sweep — مسح الـ Stops ثم انعكاس
         if bull_sweep: bs += 1.5
