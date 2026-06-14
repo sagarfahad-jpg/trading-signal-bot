@@ -92,6 +92,33 @@ def format_message(s: SignalResult) -> str:
         pos_line = ""
     mtf_warn    = "⚠️ تحذير: لا تأكيد من أي فريم زمني\n" if s.mtf_score == 0 else ""
 
+    # ── Structure summary (LuxAlgo SMC #5: Swing + Internal) ────────────
+    def _abbr_bias(b: str) -> str:
+        return {'bullish': 'صاعد', 'bearish': 'هابط'}.get(b, '—')
+
+    def _abbr_event(e: str) -> str:
+        return e if e in ('BOS', 'CHoCH', 'MSS') else '—'
+
+    align_label = {
+        'aligned':       '✅ توافق',
+        'conflicting':   '⚠️ تعارض',
+        'swing_only':    '🔵 Swing فقط',
+        'internal_only': '🟡 Internal فقط',
+        'none':          '⚪ محايد',
+    }.get(getattr(s, 'alignment', ''), '⚪ محايد')
+
+    swing_e = _abbr_event(getattr(s, 'swing_event', ''))
+    swing_b = _abbr_bias(getattr(s, 'swing_bias', ''))
+    inter_e = _abbr_event(getattr(s, 'structure_event', ''))
+    inter_b = _abbr_bias(getattr(s, 'structure_bias', ''))
+
+    structure_line = ""
+    if swing_e != '—' or inter_e != '—':
+        structure_line = (
+            f"🏛 البنية: Swing {swing_e}/{swing_b} | "
+            f"Internal {inter_e}/{inter_b} — {align_label}\n"
+        )
+
     # ── سطر التحقق: سعر السهم + الوقت الدقيق (لمطابقة السعر من منصتك) ─────────
     try:
         import pytz as _pytz
@@ -121,6 +148,7 @@ def format_message(s: SignalResult) -> str:
         f"💠 الهدف الأول: {s.target1:.2f}\n"
         f"💠 الهدف الثاني: {s.target2:.2f}\n"
         f"📊 R:R = {s.rr:.2f}  |  Score: {s.score:.1f}★  |  MTF: {s.mtf_score}/3\n"
+        f"{structure_line}"
         f"{mtf_warn}"
         f"{scalp_line}"
         f"{vwap_line}"

@@ -446,3 +446,68 @@ def detect_pd_zones_mtf(df1h: pd.DataFrame,
         'bear_modifier': round(bear_mod, 3),
         'summary':       summary,
     }
+
+
+# ─── Dual Structure (Swing + Internal) — LuxAlgo SMC #5 ──────────────────────
+
+def detect_structure_dual(df: pd.DataFrame,
+                          swing_size: int = 15,
+                          internal_size: int = 5,
+                          confluence_filter: bool = True,
+                          confluence_tolerance: float = 0.001) -> Dict:
+    """
+    يكشف البنية السوقية على طبقتين متوازيتين (محاكاة LuxAlgo SMC #5):
+      • Swing    : pivot نافذة كبيرة (افتراضي 15) — أحداث نادرة وقوية
+      • Internal : pivot نافذة صغيرة (افتراضي 5) — أحداث متكرّرة سريعة
+
+    confluence_filter: عند تطابق internal مع swing ضمن tolerance،
+                       نُلغي internal لتجنّب double counting في scoring.
+
+    Returns:
+        {
+            'swing':    {... كامل مخرجات detect_structure_events بـ swing_size},
+            'internal': {... كامل مخرجات detect_structure_events بـ internal_size},
+            'confluence': bool,
+            'alignment':  'aligned'|'conflicting'|'swing_only'|'internal_only'|'none',
+        }
+    """
+    swing    = detect_structure_events(df, pivot_size=swing_size)
+    internal = detect_structure_events(df, pivot_size=internal_size)
+
+    s_bias = swing.get('current_bias')
+    i_bias = internal.get('current_bias')
+
+    # تحديد العلاقة بين الطبقتين
+    if s_bias and i_bias:
+        if s_bias == i_bias:
+            alignment, confluence = 'aligned', True
+        else:
+            alignment, confluence = 'conflicting', False
+    elif s_bias and not i_bias:
+        alignment, confluence = 'swing_only', False
+    elif i_bias and not s_bias:
+        alignment, confluence = 'internal_only', False
+    else:
+        alignment, confluence = 'none', False
+
+    # Confluence filter: إذا internal event يطابق swing event ضمن tolerance
+    # → نُسقط internal event لتجنّب double counting في scoring
+    if confluence_filter:
+        s_price = swing.get('event_price')
+        i_price = internal.get('event_price')
+        if s_price and i_price:
+            denom = max(abs(s_price), abs(i_price), 1e-9)
+            if abs(s_price - i_price) / denom < confluence_tolerance:
+                internal = {
+                    **internal,
+                    'last_event':     None,
+                    'event_price':    None,
+                    'event_bars_ago': None,
+                }
+
+    return {
+        'swing':      swing,
+        'internal':   internal,
+        'confluence': confluence,
+        'alignment':  alignment,
+    }

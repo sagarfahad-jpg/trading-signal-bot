@@ -59,6 +59,10 @@ class SignalResult:
     strong_low:       float = 0.0
     near_strong_high: bool  = False
     near_strong_low:  bool  = False
+    # ── Internal vs Swing Structure (LuxAlgo SMC #5) ─────────────────────
+    swing_event:   str = ""   # 'BOS' | 'CHoCH' | 'MSS' | ''
+    swing_bias:    str = ""   # 'bullish' | 'bearish' | ''
+    alignment:     str = ""   # 'aligned'|'conflicting'|'swing_only'|'internal_only'|'none'
     # ── Options Flow (سياق — للتقييم لاحقاً) ───────────────────────────────────
     max_pain:  float = 0.0
     call_wall: float = 0.0
@@ -117,6 +121,7 @@ def _atr(df: pd.DataFrame, period: int = 14) -> float:
 from market_structure import (
     _pivot_levels, _find_fvg, _find_order_blocks,
     detect_structure_events, detect_pd_zones_mtf,
+    detect_structure_dual,
 )
 
 
@@ -724,11 +729,24 @@ def analyze(
         bs += pd_zones['bull_modifier']
         ps += pd_zones['bear_modifier']
 
-        # ── Structure Events (BOS / CHoCH / MSS) ─────────────────────────────
-        ms = detect_structure_events(df5, pivot_size=5)
-        _ms_event = ms.get('last_event')
-        _ms_bias  = ms.get('current_bias')
+        # ── Structure Events (Internal + Swing) — LuxAlgo SMC #5 ────────────
+        ms_dual = detect_structure_dual(
+            df5,
+            swing_size=15,
+            internal_size=5,
+            confluence_filter=True,
+            confluence_tolerance=0.001,
+        )
+        ms        = ms_dual['internal']         # توافق مع الكود السفلي
+        swing     = ms_dual['swing']
+        alignment = ms_dual['alignment']
 
+        _ms_event    = ms.get('last_event')
+        _ms_bias     = ms.get('current_bias')
+        _swing_event = swing.get('last_event')
+        _swing_bias  = swing.get('current_bias')
+
+        # ── Internal scoring (نفس الأوزان السابقة — لا تغيير) ─────────────
         if _ms_event == 'MSS':
             if _ms_bias == 'bullish':   bs += 1.5
             elif _ms_bias == 'bearish': ps += 1.5
@@ -739,9 +757,30 @@ def analyze(
             if _ms_bias == 'bullish':   bs += 0.5
             elif _ms_bias == 'bearish': ps += 0.5
 
-        # عقوبة الإشارة ضد البنية الحالية
+        # عقوبة الإشارة ضد البنية الداخلية (نفس -0.8 السابقة)
         if _ms_bias == 'bearish':   bs -= 0.8
         elif _ms_bias == 'bullish': ps -= 0.8
+
+        # ✨ Swing scoring (1.5× internal weights — أحداث أنادر وأقوى)
+        if _swing_event == 'MSS':
+            if _swing_bias == 'bullish':   bs += 2.5
+            elif _swing_bias == 'bearish': ps += 2.5
+        elif _swing_event == 'BOS':
+            if _swing_bias == 'bullish':   bs += 2.0
+            elif _swing_bias == 'bearish': ps += 2.0
+        elif _swing_event == 'CHoCH':
+            if _swing_bias == 'bullish':   bs += 1.0
+            elif _swing_bias == 'bearish': ps += 1.0
+
+        # ✨ Confluence bonus عند توافق الطبقتين
+        if alignment == 'aligned':
+            if _swing_bias == 'bullish':   bs += 1.0
+            elif _swing_bias == 'bearish': ps += 1.0
+        # conflicting/swing_only/internal_only/none → لا bonus ولا عقوبة إضافية
+
+        # ✨ عقوبة swing معاكسة (أشد من internal لأن swing أقوى)
+        if _swing_bias == 'bearish':   bs -= 1.2
+        elif _swing_bias == 'bullish': ps -= 1.2
 
         # ── Strong/Weak Highs & Lows (LuxAlgo SMC #4) ────────────────────
         strength = ms.get('strength', {})
@@ -1064,6 +1103,9 @@ def analyze(
             strong_low=float(strong_l) if strong_l else 0.0,
             near_strong_high=bool(near_strong_high),
             near_strong_low=bool(near_strong_low),
+            swing_event=_swing_event or "",
+            swing_bias=_swing_bias or "",
+            alignment=alignment or "",
             max_pain=of_mp, call_wall=of_cw, put_wall=of_pw, pcr=of_pcr,
         )
 
