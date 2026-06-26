@@ -13,7 +13,7 @@ import data_client
 # ─── Scalp classification threshold (ATR كنسبة من السعر) ─────────────────────
 # تحت العتبة = تقلّب منخفض → scalp (0DTE + بوّابة رفض صلبة تتطلّب تأكيد MTF).
 # SCALP_ATR_PCT_OLD = العتبة التاريخية، تُستخدم في shadow logging للمقارنة فقط.
-SCALP_ATR_PCT     = 0.007   # 0.7%
+SCALP_ATR_PCT     = 0.004   # 0.4%  (خُفِّض من 0.7% — فكّ الاعتماد الإجباري على MTF)
 SCALP_ATR_PCT_OLD = 0.007   # 0.7% — baseline تاريخي (shadow only)
 
 
