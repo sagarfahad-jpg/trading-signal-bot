@@ -7,6 +7,7 @@
 signals_log.json
 asset_thresholds.json
 watchlist.json
+shadow_log.jsonl
 
 # Python cache
 __pycache__/

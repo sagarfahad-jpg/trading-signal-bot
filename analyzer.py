@@ -5,7 +5,16 @@ import numpy as np
 import yfinance as yf
 from datetime import datetime, timedelta
 import pytz
+import json
+import os
 import data_client
+
+
+# ─── Scalp classification threshold (ATR كنسبة من السعر) ─────────────────────
+# تحت العتبة = تقلّب منخفض → scalp (0DTE + بوّابة رفض صلبة تتطلّب تأكيد MTF).
+# SCALP_ATR_PCT_OLD = العتبة التاريخية، تُستخدم في shadow logging للمقارنة فقط.
+SCALP_ATR_PCT     = 0.004   # 0.4%  (خُفِّض من 0.7% — فكّ الاعتماد الإجباري على MTF)
+SCALP_ATR_PCT_OLD = 0.007   # 0.7% — baseline تاريخي (shadow only)
 
 
 @dataclass
@@ -247,21 +256,47 @@ def has_earnings_soon(symbol: str, days: int = 2) -> bool:
     return result
 
 
-def _quick_direction(symbol: str, interval: str, period: str) -> Optional[str]:
-    """Fast direction check on a single timeframe. Returns 'call', 'put', or None."""
+def _direction_signals(rsi: float, rsi_p: float, price: float,
+                       sma20: float) -> Tuple[Optional[str], Optional[str]]:
+    """
+    يُرجع (old, new) لاتجاه فريم واحد — للمقارنة في shadow logging.
+
+    old : منطق mean-reversion القديم (يشترط RSI على الجهة المعاكسة من 50).
+          يُحتفظ به للتسجيل فقط — لا يؤثّر على القرار.
+    new : منطق الاستمرار الجديد (B) — القرار الفعلي:
+          توافق الترند (price مقابل sma20) + زخم RSI صاعد/هابط،
+          مع تجنّب التطرّف (CALL: rsi < 70 | PUT: rsi > 30).
+    """
+    old = ('call' if (rsi < 50 and rsi > rsi_p and price > sma20)
+           else 'put' if (rsi > 50 and rsi < rsi_p and price < sma20)
+           else None)
+    new = ('call' if (price > sma20 and rsi > rsi_p and rsi < 70)
+           else 'put' if (price < sma20 and rsi < rsi_p and rsi > 30)
+           else None)
+    return old, new
+
+
+def _quick_direction(symbol: str, interval: str, period: str,
+                     shadow: Optional[dict] = None) -> Optional[str]:
+    """
+    Fast direction check on a single timeframe. Returns 'call', 'put', or None.
+
+    القرار الفعلي = المنطق الجديد (B). لو مُرِّر shadow، يُخزَّن اتجاه المنطق
+    القديم في shadow[interval] للمقارنة فقط — دون أي أثر على القيمة المُعادة.
+    """
     try:
         df = data_client.get_bars(symbol, interval, period)
         if df.empty or len(df) < 30:
             return None
-        price  = float(df['Close'].iloc[-1])
-        rsi    = float(_rsi(df['Close']).iloc[-1])
-        rsi_p  = float(_rsi(df['Close']).iloc[-4])
-        sma20  = float(df['Close'].rolling(20).mean().iloc[-1])
-        if rsi < 50 and rsi > rsi_p and price > sma20:
-            return 'call'
-        if rsi > 50 and rsi < rsi_p and price < sma20:
-            return 'put'
-        return None
+        price      = float(df['Close'].iloc[-1])
+        rsi_series = _rsi(df['Close'])
+        rsi        = float(rsi_series.iloc[-1])
+        rsi_p      = float(rsi_series.iloc[-4])
+        sma20      = float(df['Close'].rolling(20).mean().iloc[-1])
+        old, new   = _direction_signals(rsi, rsi_p, price, sma20)
+        if shadow is not None:
+            shadow[interval] = {'old': old, 'new': new}
+        return new
     except Exception:
         return None
 
@@ -673,6 +708,38 @@ def quick_scan(symbol: str) -> Optional[dict]:
         return None
 
 
+# ─── Shadow logging (مقارنة منطق القرار القديم مقابل الجديد) ─────────────────
+_SHADOW_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shadow_log.jsonl")
+
+
+def _shadow_record(symbol, direction, shadow_tf, mtf_new, mtf_old,
+                   scalp_new, scalp_old, score_new, score_old, eff_min,
+                   gate_old, gate_new, pass_old, pass_new, rsi, atr_pct):
+    """
+    يسجّل مقارنة «القديم مقابل الجديد» — يُستدعى عند اختلاف القرار فقط
+    (gate أو pass). جانبي بحت: لا يؤثّر على القرار الفعلي إطلاقاً.
+    """
+    print(f"  [shadow] {symbol} {direction} | mtf {mtf_old}->{mtf_new} | "
+          f"scalp {scalp_old}->{scalp_new} | score {score_old:.1f}->{score_new:.1f} "
+          f"(min {eff_min:.1f}) | pass {pass_old}->{pass_new}")
+    rec = {
+        "ts": datetime.now(pytz.timezone('America/New_York')).isoformat(),
+        "symbol": symbol, "direction": direction, "tf": shadow_tf,
+        "mtf_old": mtf_old, "mtf_new": mtf_new,
+        "scalp_old": scalp_old, "scalp_new": scalp_new,
+        "score_old": round(score_old, 2), "score_new": round(score_new, 2),
+        "eff_min": round(eff_min, 2),
+        "gate_old": gate_old, "gate_new": gate_new,
+        "pass_old": pass_old, "pass_new": pass_new,
+        "rsi": round(rsi, 1), "atr_pct": round(atr_pct, 3),
+    }
+    try:
+        with open(_SHADOW_PATH, "a") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"  [shadow] ⚠️ تعذّر كتابة shadow_log.jsonl: {e}")
+
+
 # ─── Main analysis ────────────────────────────────────────────────────────────
 
 def analyze(
@@ -1069,8 +1136,9 @@ def analyze(
             # تشديد الجمعة بعد الظهر (weekday 4) — انتهاء أوبشن + خطر العطلة
             if _et_now.weekday() == 4 and _et_mins >= (13 * 60):
                 effective_min += 1.0
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [analyzer] ⚠️ {symbol}: فشل فلتر الجلسة/الوقت (pytz?) — "
+                  f"تُطبَّق العتبة بدون تشديد إضافي: {e}")
 
         if bs >= ps and bs >= effective_min:
             direction, score = 'call', bs
@@ -1082,20 +1150,39 @@ def analyze(
         confidence = 'high' if score >= high_confidence_threshold else 'medium'
 
         # ── تأكيد Multi-Timeframe (مؤشر جودة لا بوابة رفض) ──────────────────
-        tf15 = _quick_direction(symbol, '15m', '5d')
-        tf1h = _quick_direction(symbol, '1h',  '30d')
-        tf4h = _quick_direction(symbol, '4h',  '60d')
+        _shadow_tf: dict = {}
+        tf15 = _quick_direction(symbol, '15m', '5d', shadow=_shadow_tf)
+        tf1h = _quick_direction(symbol, '1h',  '30d', shadow=_shadow_tf)
+        tf4h = _quick_direction(symbol, '4h',  '60d', shadow=_shadow_tf)
         mtf_score = sum(1 for tf in [tf15, tf1h, tf4h] if tf == direction)
 
-        # مكافأة / عقوبة حسب عدد الفريمات المؤكِّدة
-        if   mtf_score == 3: score += 0.9   # الثلاثة يؤكدون
-        elif mtf_score == 2: score += 0.3   # اثنان يؤكدان
-        elif mtf_score == 1: score -= 0.5   # واحد فقط
-        else:                score -= 3.0   # لا أحد — عقوبة قوية (ضد الاتجاه العام)
+        # SHADOW: mtf_score بمنطق _quick_direction القديم (للمقارنة فقط)
+        mtf_score_old = sum(1 for v in _shadow_tf.values() if v['old'] == direction)
+
+        # مكافأة / عقوبة حسب عدد الفريمات المؤكِّدة (3→+0.9, 2→+0.3, 1→-0.5, 0→-3.0)
+        def _mtf_adj(m: int) -> float:
+            return 0.9 if m == 3 else 0.3 if m == 2 else -0.5 if m == 1 else -3.0
+
+        score_pre_mtf = score
+        score += _mtf_adj(mtf_score)                          # القرار الفعلي (جديد)
+        score_old = score_pre_mtf + _mtf_adj(mtf_score_old)   # SHADOW (قديم)
 
         # ── فلتر صارم: 0DTE + لا تأكيد من أي فريم = مقامرة → رفض ──────────────
-        is_scalp = (atr / price) < 0.007
-        if is_scalp and mtf_score == 0:
+        is_scalp     = (atr / price) < SCALP_ATR_PCT          # القرار الفعلي
+        is_scalp_old = (atr / price) < SCALP_ATR_PCT_OLD      # SHADOW
+
+        # SHADOW: قرار كل منطق عند مرحلة MTF/scalp/min-score (المرحلة التي غُيِّرت).
+        # الفلاتر اللاحقة (R:R/perf/تكلفة) متطابقة للقديم والجديد فلا تسبّب تباعداً.
+        gate_new = is_scalp     and mtf_score     == 0
+        gate_old = is_scalp_old and mtf_score_old == 0
+        pass_new = (not gate_new) and (score     >= effective_min)
+        pass_old = (not gate_old) and (score_old >= effective_min)
+        if gate_old != gate_new or pass_old != pass_new:
+            _shadow_record(symbol, direction, _shadow_tf, mtf_score, mtf_score_old,
+                           is_scalp, is_scalp_old, score, score_old, effective_min,
+                           gate_old, gate_new, pass_old, pass_new, rsi, atr / price * 100)
+
+        if gate_new:
             # Diagnostic verbose — لتحليل الفرص الضائعة لاحقاً
             print(f"  [analyzer] {symbol}: رُفضت — 0DTE+MTF=0 | "
                   f"dir={direction} score={score:.1f} RSI={rsi:.1f} "
@@ -1216,7 +1303,7 @@ def analyze(
             is_cisd     = (direction == 'call' and _bc) or (direction == 'put' and _brc)
             is_displace = displacement_5m(df5, direction, atr)
 
-        is_scalp   = (atr / price) < 0.007
+        is_scalp   = (atr / price) < SCALP_ATR_PCT
         expiry, strike, option_price, delta, iv, theta = _get_contract(
             symbol, direction, price, is_scalp=is_scalp, score=score)
 
