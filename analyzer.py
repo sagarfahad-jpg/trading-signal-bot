@@ -1096,7 +1096,11 @@ def analyze(
         # ── فلتر صارم: 0DTE + لا تأكيد من أي فريم = مقامرة → رفض ──────────────
         is_scalp = (atr / price) < 0.007
         if is_scalp and mtf_score == 0:
-            print(f"  [analyzer] {symbol}: رُفضت — 0DTE بلا تأكيد MTF (مقامرة)")
+            # Diagnostic verbose — لتحليل الفرص الضائعة لاحقاً
+            print(f"  [analyzer] {symbol}: رُفضت — 0DTE+MTF=0 | "
+                  f"dir={direction} score={score:.1f} RSI={rsi:.1f} "
+                  f"atr/p={atr/price*100:.2f}% | "
+                  f"tf15={tf15 or '—'} tf1h={tf1h or '—'} tf4h={tf4h or '—'}")
             return None
 
         # أعد فحص الحد الأدنى بعد تعديل السكور
