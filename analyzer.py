@@ -1136,8 +1136,9 @@ def analyze(
             # تشديد الجمعة بعد الظهر (weekday 4) — انتهاء أوبشن + خطر العطلة
             if _et_now.weekday() == 4 and _et_mins >= (13 * 60):
                 effective_min += 1.0
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [analyzer] ⚠️ {symbol}: فشل فلتر الجلسة/الوقت (pytz?) — "
+                  f"تُطبَّق العتبة بدون تشديد إضافي: {e}")
 
         if bs >= ps and bs >= effective_min:
             direction, score = 'call', bs
