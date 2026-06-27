@@ -80,6 +80,7 @@ def save_signal(sig: "SignalResult") -> Optional[int]:
         "option_price":  round(sig.option_price, 2),
         "contracts":     sig.contracts,
         "regime":        sig.regime,
+        "price_source":  sig.price_source or None,
         "htf_zone_tf":   sig.htf_zone_tf,
         "htf_zone_type": sig.htf_zone_type,
         "htf_direction": sig.htf_direction,

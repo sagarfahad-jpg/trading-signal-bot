@@ -74,13 +74,16 @@ def get_bars(symbol: str, interval: str = "5m", period: str = "2d") -> pd.DataFr
     if config.ALPACA_API_KEY and config.ALPACA_SECRET_KEY:
         df = _fetch_alpaca(symbol, interval, period)
         if df is not None and not df.empty:
+            df.attrs["source"] = "alpaca_iex"
             if ttl:
                 _bars_cache[(symbol, interval, period)] = (df, _time.time())
             return df
 
     df = _fetch_yfinance(symbol, interval, period)
-    if ttl and not df.empty:
-        _bars_cache[(symbol, interval, period)] = (df, _time.time())
+    if not df.empty:
+        df.attrs["source"] = "yfinance"
+        if ttl:
+            _bars_cache[(symbol, interval, period)] = (df, _time.time())
     return df
 
 
