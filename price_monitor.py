@@ -275,8 +275,8 @@ def _check(sig: dict, price: float, bar=None) -> None:
 
     # ── تتبّع MFE/MAE (بالـ R) + أعلى/أدنى سعر فعلي ──────────────────────────
     r_now = _current_r(direction, price, entry_px, stop_px)
-    _mfe[sid] = max(_mfe.get(sid, r_now), r_now)
-    _mae[sid] = min(_mae.get(sid, r_now), r_now)
+    _mfe[sid] = max(_mfe.get(sid, 0.0), r_now)   # baseline R=0 عند الدخول
+    _mae[sid] = min(_mae.get(sid, 0.0), r_now)   # MAE ≤ 0 دائماً (إصلاح البذرة الموجبة)
     _hi_px[sid] = max(_hi_px.get(sid, price), price)
     _lo_px[sid] = min(_lo_px.get(sid, price), price)
 
