@@ -328,6 +328,8 @@ def update_outcome(
     max_adverse: Optional[float] = None,
     lowest_price: Optional[float] = None,
     highest_price: Optional[float] = None,
+    exit_option_price: Optional[float] = None,
+    option_pnl_pct: Optional[float] = None,
 ) -> bool:
     """يحدّث نتيجة إشارة موجودة مع تفاصيل سلامة البيانات."""
     if not is_configured():
@@ -351,6 +353,10 @@ def update_outcome(
         payload["lowest_price"] = round(lowest_price, 2)
     if highest_price is not None:
         payload["highest_price"] = round(highest_price, 2)
+    if exit_option_price is not None:
+        payload["exit_option_price"] = round(exit_option_price, 2)
+    if option_pnl_pct is not None:
+        payload["option_pnl_pct"] = round(option_pnl_pct, 2)
     try:
         r = requests.patch(
             f"{_url()}/rest/v1/{TABLE}?id=eq.{signal_id}",
