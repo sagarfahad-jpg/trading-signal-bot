@@ -43,6 +43,7 @@ class SignalResult:
     contracts:     int   = 1     # عدد العقود المقترح (Position Sizing)
     vwap:          float = 0.0   # VWAP لحظة الإشارة
     regime:        str   = ""    # "bull" / "bear" / "neutral"
+    price_source:  str   = ""    # 'alpaca_iex' | 'yfinance' | 'unknown' — مصدر بيانات الإشارة
     # ── HTF Analysis ──────────────────────────────────────────────────────────
     htf_zone_tf:   str   = ""    # '1h' | '4h' | 'daily'
     htf_zone_type: str   = ""    # 'OB' | 'FVG'
@@ -762,6 +763,7 @@ def analyze(
 
         price = float(df5['Close'].iloc[-1])
         atr   = _atr(df5)
+        price_source = df5.attrs.get("source", "unknown")   # مصدر بيانات توليد الإشارة (df5)
 
         # ── فلتر Earnings ─────────────────────────────────────────────────────
         if has_earnings_soon(symbol):
@@ -1347,6 +1349,7 @@ def analyze(
             rr=round(rr, 2), vix=round(vix, 1), mtf_score=mtf_score,
             option_price=option_price, delta=delta, iv=iv, theta=theta,
             contracts=contracts, vwap=round(vwap_val, 2), regime=regime,
+            price_source=price_source,
             htf_zone_tf=htf_zone_tf, htf_zone_type=htf_zone_type,
             htf_direction=htf_direction, cisd=is_cisd, displacement=is_displace,
             smt_divergence=bool(_smt_dir), smt_direction=_smt_dir,

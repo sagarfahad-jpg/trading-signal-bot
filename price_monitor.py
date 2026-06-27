@@ -56,9 +56,15 @@ def _duration_min(sig) -> int:
         return 0
 
 
-def _finalize(sig, status, outcome_price, r, reason):
+def _finalize(sig, status, outcome_price, r, reason, exit_option_price=None):
     """يُغلق الإشارة مع كل تفاصيل سلامة البيانات + ينظّف الذاكرة."""
     sid = sig["id"]
+    # سعر العقد عند الخروج (حقيقي فقط) + P&L العقد — null لو سعر الدخول/الخروج غير متوفّر
+    exit_opt = exit_option_price if (exit_option_price and exit_option_price > 0) else None
+    entry_opt = sig.get("entry_option_price")
+    option_pnl_pct = None
+    if exit_opt is not None and entry_opt and float(entry_opt) > 0:
+        option_pnl_pct = round((exit_opt - float(entry_opt)) / float(entry_opt) * 100, 2)
     db.update_outcome(
         sid, status, outcome_price, r,
         exit_reason=reason,
@@ -67,6 +73,8 @@ def _finalize(sig, status, outcome_price, r, reason):
         max_adverse=_mae.get(sid),
         lowest_price=_lo_px.get(sid),
         highest_price=_hi_px.get(sid),
+        exit_option_price=exit_opt,
+        option_pnl_pct=option_pnl_pct,
     )
     for d in (_milestones, _peak, _mfe, _mae, _lo_px, _hi_px):
         d.pop(sid, None)
@@ -174,8 +182,14 @@ def _check(sig: dict, price: float, bar=None) -> None:
             r = (entry_px - price) / (stop_px - entry_px)
         else:
             r = 0.0
+        real_opt = 0.0
+        try:
+            real_opt = dc.get_option_price_by_contract(
+                symbol, sig.get("strike"), sig.get("expiry"), direction)
+        except Exception:
+            real_opt = 0.0
         _alert_manual_exit(sig, price, r)
-        _finalize(sig, "manual_exit", price, round(r, 3), "manual")
+        _finalize(sig, "manual_exit", price, round(r, 3), "manual", exit_option_price=real_opt)
         return
 
     ms = _milestones.setdefault(sid, set())
@@ -247,22 +261,22 @@ def _check(sig: dict, price: float, bar=None) -> None:
     if abs(delta) < 0.01:
         delta = 0.45 if direction == "call" else -0.45
 
-    # ── السعر الحقيقي للعقد من Alpaca (بدل التقدير بالـ Delta) ───────────────
-    contract_now = 0.0
+    # ── السعر الحقيقي للعقد من Alpaca (mid) — يُخزَّن كـ exit price عند الخروج ─
+    real_opt = 0.0
     try:
-        contract_now = dc.get_option_price_by_contract(
+        real_opt = dc.get_option_price_by_contract(
             symbol, sig.get("strike"), sig.get("expiry"), direction)
     except Exception:
-        contract_now = 0.0
-    # fallback: تقدير بالـ Delta لو فشل الجلب
-    if contract_now <= 0:
-        contract_now = max(0.01, opt_px + (price - entry_px) * delta) if opt_px else 0
+        real_opt = 0.0
+    # contract_now للعرض/التنبيهات فقط: حقيقي إن توفّر وإلا تقدير Delta (لا يُخزَّن)
+    contract_now = real_opt if real_opt > 0 else (
+        max(0.01, opt_px + (price - entry_px) * delta) if opt_px else 0)
     pct = (contract_now - opt_px) / opt_px * 100 if opt_px else 0
 
     # ── تتبّع MFE/MAE (بالـ R) + أعلى/أدنى سعر فعلي ──────────────────────────
     r_now = _current_r(direction, price, entry_px, stop_px)
-    _mfe[sid] = max(_mfe.get(sid, r_now), r_now)
-    _mae[sid] = min(_mae.get(sid, r_now), r_now)
+    _mfe[sid] = max(_mfe.get(sid, 0.0), r_now)   # baseline R=0 عند الدخول
+    _mae[sid] = min(_mae.get(sid, 0.0), r_now)   # MAE ≤ 0 دائماً (إصلاح البذرة الموجبة)
     _hi_px[sid] = max(_hi_px.get(sid, price), price)
     _lo_px[sid] = min(_lo_px.get(sid, price), price)
 
@@ -272,7 +286,7 @@ def _check(sig: dict, price: float, bar=None) -> None:
     if t2 and "T2" not in ms:
         ms.add("T2")
         _alert_exit(sig, price, contract_now, pct, "T2")
-        _finalize(sig, "hit_t2", target2, round(rr, 3), "target2")
+        _finalize(sig, "hit_t2", target2, round(rr, 3), "target2", exit_option_price=real_opt)
         return
 
     # ── Stop (يُغلق) ────────────────────────────────────────────────────────
@@ -283,10 +297,10 @@ def _check(sig: dict, price: float, bar=None) -> None:
         if "T1" in ms:
             # وصل T1 ثم رجع للوقف → نُسجّلها فوز جزئي (الوقف عند التعادل)
             _alert_exit(sig, price, contract_now, pct, "stop_after_t1")
-            _finalize(sig, "hit_t1", target1, round(rr * 0.5, 3), "stop_after_t1")
+            _finalize(sig, "hit_t1", target1, round(rr * 0.5, 3), "stop_after_t1", exit_option_price=real_opt)
         else:
             _alert_exit(sig, price, contract_now, pct, "stop")
-            _finalize(sig, "stopped", stop_px, -1.0, "stop")
+            _finalize(sig, "stopped", stop_px, -1.0, "stop", exit_option_price=real_opt)
         return
 
     # ── T1 (لا يُغلق — تنبيه فقط + تفعيل Trailing Stop) ─────────────────────
@@ -305,14 +319,14 @@ def _check(sig: dict, price: float, bar=None) -> None:
             if price <= _peak[sid] - trail_gap and "trail" not in ms:
                 ms.add("trail")
                 _alert_exit(sig, price, contract_now, pct, "trail")
-                _finalize(sig, "hit_t1", _peak[sid] - trail_gap, round(rr * 0.5, 3), "trailing_stop")
+                _finalize(sig, "hit_t1", _peak[sid] - trail_gap, round(rr * 0.5, 3), "trailing_stop", exit_option_price=real_opt)
                 return
         else:
             _peak[sid] = min(_peak.get(sid, price), price)
             if price >= _peak[sid] + trail_gap and "trail" not in ms:
                 ms.add("trail")
                 _alert_exit(sig, price, contract_now, pct, "trail")
-                _finalize(sig, "hit_t1", _peak[sid] + trail_gap, round(rr * 0.5, 3), "trailing_stop")
+                _finalize(sig, "hit_t1", _peak[sid] + trail_gap, round(rr * 0.5, 3), "trailing_stop", exit_option_price=real_opt)
                 return
 
     # ── محطات الربح ──────────────────────────────────────────────────────────
