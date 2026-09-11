@@ -18,6 +18,7 @@ from telegram_commands import start_command_listener
 import db
 import outcome_tracker
 import price_monitor
+import shadow_gate
 
 LOG_FILE       = os.path.join(os.path.dirname(__file__), "signals_log.json")
 WATCHLIST_FILE = os.path.join(os.path.dirname(__file__), "watchlist.json")
@@ -84,9 +85,11 @@ def _write_log(data: list):
 
 
 def log_signal(signal: SignalResult, sent_ok: bool):
+    """يحفظ الإشارة (Supabase + ملف محلي) ويُرجع id صف signals (أو None)."""
     # ── حفظ في Supabase (مشترك مع Dashboard) ─────────────────────────────────
+    sig_id = None
     if sent_ok:
-        db.save_signal(signal)
+        sig_id = db.save_signal(signal)
 
     log = _load_log()
     log.append({
@@ -121,6 +124,7 @@ def log_signal(signal: SignalResult, sent_ok: bool):
     })
     _write_log(log)
     # المراقبة الآن تُدار من Supabase عبر price_monitor (لا حاجة لإضافة يدوية)
+    return sig_id
 
 
 # ─── Outcome notifications ────────────────────────────────────────────────────
@@ -563,7 +567,15 @@ def scan():
         except Exception:
             chart = b""
         ok = send_photo(chart, msg, config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
-        log_signal(signal, ok)
+        sig_id = log_signal(signal, ok)
+        # وضع الظل (المرحلة ٢): تسجيل مراقبة مرتبطة بالصف — لا أثر على الإشارة الحية
+        if ok and sig_id:
+            try:
+                shadow_gate.register(signal, sig_id)
+            except Exception as e:
+                print(f"  [shadow] register {symbol}: {e}")
+        elif ok:
+            print(f"  [shadow] {symbol}: لا id للإشارة (فشل الحفظ) — لا مراقبة ظل")
 
         if ok:
             last_signal[symbol] = datetime.now()
@@ -771,6 +783,7 @@ def main():
     threading.Thread(target=_daily_summary_loop,  daemon=True).start()
     threading.Thread(target=_premarket_loop,      daemon=True).start()
     price_monitor.start()
+    shadow_gate.start()
     start_command_listener(scan_callback=scan)
 
     current_scan_interval = config.SCAN_INTERVAL_MINUTES
