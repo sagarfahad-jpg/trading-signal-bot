@@ -50,6 +50,14 @@ class SignalResult:
     htf_direction: str   = ""    # 'demand' | 'supply'
     cisd:          bool  = False # CISD مؤكَّد على 5m
     displacement:  bool  = False # Displacement Candle على 5m
+    # ── لبوابة الدخول / وضع الظل (المرحلة ٢) — لا تدخل db.save_signal ─────────────
+    htf_zone_low:  float = 0.0   # حدود منطقة HTF الفعلية (لا الشريط الضحل entry_low/high)
+    htf_zone_high: float = 0.0
+    alt_zone_low:  float = 0.0   # منطقة موافقة بديلة تحتوي السعر عند تعارض المنطقة النشطة (تحليل فقط)
+    alt_zone_high: float = 0.0
+    alt_zone_tf:   str   = ""
+    alt_zone_type: str   = ""
+    atr:           float = 0.0   # ATR(14) على 5m لحظة الإشارة
     # ── SMT ───────────────────────────────────────────────────────────────────
     smt_divergence: bool = False  # SMT divergence detected (^NDX vs ^GSPC)
     smt_direction:  str  = ""     # 'call' | 'put' | ''
@@ -1305,6 +1313,21 @@ def analyze(
             is_cisd     = (direction == 'call' and _bc) or (direction == 'put' and _brc)
             is_displace = displacement_5m(df5, direction, atr)
 
+        # ── حدود منطقة HTF + منطقة موافقة بديلة (لبوابة الدخول / الظل) ─────────
+        # price_in_zone يعيد أقوى منطقة تحتوي السعر بغض النظر عن اتجاهها؛ عند التعارض
+        # نسجّل (للتحليل فقط، بلا إنقاذ) هل وُجدت منطقة موافقة أضعف تحتوي السعر.
+        zone_low = zone_high = 0.0
+        alt_low = alt_high = 0.0
+        alt_tf = alt_type = ""
+        if active_zone:
+            zone_low, zone_high = float(active_zone.low), float(active_zone.high)
+            _exp_dir = 'demand' if direction == 'call' else 'supply'
+            if active_zone.direction != _exp_dir:
+                _alt = price_in_zone(price, [z for z in htf['zones'] if z.direction == _exp_dir])
+                if _alt:
+                    alt_low, alt_high = float(_alt.low), float(_alt.high)
+                    alt_tf, alt_type  = _alt.timeframe, _alt.zone_type.upper()
+
         is_scalp   = (atr / price) < SCALP_ATR_PCT
         expiry, strike, option_price, delta, iv, theta = _get_contract(
             symbol, direction, price, is_scalp=is_scalp, score=score)
@@ -1352,6 +1375,10 @@ def analyze(
             price_source=price_source,
             htf_zone_tf=htf_zone_tf, htf_zone_type=htf_zone_type,
             htf_direction=htf_direction, cisd=is_cisd, displacement=is_displace,
+            htf_zone_low=round(zone_low, 4), htf_zone_high=round(zone_high, 4),
+            alt_zone_low=round(alt_low, 4), alt_zone_high=round(alt_high, 4),
+            alt_zone_tf=alt_tf, alt_zone_type=alt_type,
+            atr=round(float(atr), 4),
             smt_divergence=bool(_smt_dir), smt_direction=_smt_dir,
             structure_event=_ms_event or "",
             structure_bias=_ms_bias or "",
