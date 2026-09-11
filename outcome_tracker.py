@@ -1,117 +1,76 @@
 """
-Outcome Tracker
-يتتبع نتائج الإشارات المفتوحة في Supabase ويحدّثها تلقائياً.
+Outcome Tracker — شبكة أمان للانتهاء فقط (منذ 2026-09-11).
 
-المنطق:
-  - يجلب كل الإشارات بـ status='open'
-  - لكل إشارة يجلب أعلى/أدنى سعر منذ الإرسال
-  - يحدّث النتيجة: hit_t1 | hit_t2 | stopped | expired
-  - R-Multiple:  hit_t2 = R:R كامل | hit_t1 = R:R × 0.5 | stopped = −1R
+الحكم على النتائج (T1/T2/Stop) أُزيل: كان يقيس أعلى/أدنى شمعة 5m من وقت الإشارة
+لا الدخول، ويفحص الهدف قبل الوقف، فسجّل "فوزاً" لصفقات ضُرب ستوبها
+(220 صفقة بفوز 78% مقابل 24% للحكم الحي). price_monitor هو الحكم الوحيد الآن.
+
+ما بقي: إنهاء الصفقات المفتوحة التي مات عقدها دون أن يلمس السعر مستوى عند أي فحص،
+حتى لا تبقى مفتوحة إلى الأبد (تحجب إشارات الرمز عبر has_open_signal وتُراقَب بعقد ميت).
+الكتابة مشروطة بـ status='open' لحظة التنفيذ (فلتر على الخادم) — لا كتابة مزدوجة.
 """
 
 from __future__ import annotations
 
 import datetime
-import data_client as dc
+import pytz
 import db
 
-MAX_AGE_HOURS = 48   # إشارات أقدم من يومين → منتهية الصلاحية
+ET            = pytz.timezone("America/New_York")
+MAX_AGE_HOURS = 48         # احتياط فقط لصفوف بلا expiry صالح
+CLOSE_CUTOFF  = (16, 15)   # بعد هذا الوقت ET يُعتبر عقد اليوم منتهياً
 
 
-def check_outcomes() -> None:
-    """نقطة الدخول الرئيسية — يستدعيها main.py كل 30 دقيقة."""
+def _expiry_date(sig: dict) -> datetime.date | None:
+    """expiry محفوظ كـ YYYYMMDD (أو YYYY-MM-DD)."""
+    s = str(sig.get("expiry") or "").replace("-", "")[:8]
+    try:
+        return datetime.datetime.strptime(s, "%Y%m%d").date()
+    except ValueError:
+        return None
+
+
+def _parse_ts(value) -> datetime.datetime | None:
+    try:
+        return datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _age_hours(sig: dict, now: datetime.datetime) -> float:
+    created = _parse_ts(sig.get("created_at", ""))
+    return (now - created).total_seconds() / 3600 if created else 0.0
+
+
+def _contract_dead(sig: dict, now_et: datetime.datetime) -> bool:
+    """هل مات عقد الصفقة؟ (انتهاء أقدم من اليوم ET، أو اليوم نفسه بعد الإغلاق)."""
+    exp = _expiry_date(sig)
+    if exp is None:
+        return _age_hours(sig, now_et) > MAX_AGE_HOURS
+    if exp < now_et.date():
+        return True
+    return exp == now_et.date() and (now_et.hour, now_et.minute) >= CLOSE_CUTOFF
+
+
+def expire_stale() -> None:
+    """نقطة الدخول — يستدعيها main.py كل 30 دقيقة. لا يحكم على نتيجة، يُنهي فقط."""
     if not db.is_configured():
         return
-
-    open_signals = db.get_open_signals()
-    if not open_signals:
-        return
-
-    print(f"  [tracker] فحص {len(open_signals)} إشارة مفتوحة ...")
-    for sig in open_signals:
-        try:
-            _check_one(sig)
-        except Exception as e:
-            sym = sig.get("symbol", "?")
-            print(f"  [tracker] خطأ في {sym}: {e}")
-
-
-def _check_one(sig: dict) -> None:
-    symbol    = sig["symbol"]
-    direction = sig.get("direction", "")
-    entry     = float(sig.get("entry_price") or 0)
-    stop      = float(sig.get("stop_price")  or 0)
-    target1   = float(sig.get("target1")     or 0)
-    target2   = float(sig.get("target2")     or 0)
-    rr        = float(sig.get("rr")          or 1.5)
-    sig_id    = sig["id"]
-
-    if entry <= 0 or stop <= 0:
-        return
-
-    # ── تحقق من العمر ────────────────────────────────────────────────────────
-    try:
-        created_str = sig.get("created_at", "")
-        # Supabase يُرجع مثلاً: "2025-05-29T14:00:00+00:00"
-        created = datetime.datetime.fromisoformat(
-            created_str.replace("Z", "+00:00")
+    now_et = datetime.datetime.now(ET)
+    for sig in db.get_open_signals():          # status = 'open'
+        if not sig.get("entry_filled"):
+            continue   # المعلّقة يلغيها price_monitor بعد 24 ساعة (expired_no_entry)
+        if not _contract_dead(sig, now_et):
+            continue
+        t0  = _parse_ts(sig.get("entry_time") or sig.get("created_at"))
+        dur = int((now_et - t0).total_seconds() / 60) if t0 else None
+        ok  = db.update_outcome(
+            sig["id"], "expired", 0.0, 0.0,
+            exit_reason="contract_expired", duration_min=dur,
+            only_if_status="open",             # لا كتابة لو أغلقها price_monitor في هذه الأثناء
         )
-        age_hours = (
-            datetime.datetime.now(datetime.timezone.utc) - created
-        ).total_seconds() / 3600
-    except Exception:
-        age_hours = 0
-
-    if age_hours > MAX_AGE_HOURS:
-        db.update_outcome(sig_id, "expired", 0.0, 0.0)
-        print(f"  [tracker] ⏰ {symbol} منتهية ({age_hours:.0f}h)")
-        return
-
-    # إشارة لم يتحقق دخولها بعد → لا نقيّم نتيجتها (price_monitor يتابعها)
-    if not sig.get("entry_filled"):
-        return
-
-    # ── جلب بيانات السعر ─────────────────────────────────────────────────────
-    try:
-        df = dc.get_bars(symbol, "5m", "2d")
-        if df.empty:
-            return
-
-        # فلتر: فقط الشموع بعد وقت الإشارة
-        try:
-            if df.index.tz is None:
-                df.index = df.index.tz_localize("UTC")
-            df = df[df.index >= created]
-        except Exception:
-            pass  # إذا فشل الفلتر استخدم كل البيانات
-
-        if df.empty:
-            return
-
-        hi = float(df["High"].max())
-        lo = float(df["Low"].min())
-    except Exception:
-        return
-
-    # ── قرار النتيجة ─────────────────────────────────────────────────────────
-    if direction == "call":
-        if hi >= target2:
-            db.update_outcome(sig_id, "hit_t2", target2, round(rr, 3))
-            print(f"  [tracker] ✅✅ {symbol} CALL → T2  +{rr:.2f}R")
-        elif hi >= target1:
-            db.update_outcome(sig_id, "hit_t1", target1, round(rr * 0.5, 3))
-            print(f"  [tracker] ✅  {symbol} CALL → T1  +{rr*0.5:.2f}R")
-        elif lo <= stop:
-            db.update_outcome(sig_id, "stopped", stop, -1.0)
-            print(f"  [tracker] ❌  {symbol} CALL → Stop  −1R")
-
-    elif direction == "put":
-        if lo <= target2:
-            db.update_outcome(sig_id, "hit_t2", target2, round(rr, 3))
-            print(f"  [tracker] ✅✅ {symbol} PUT  → T2  +{rr:.2f}R")
-        elif lo <= target1:
-            db.update_outcome(sig_id, "hit_t1", target1, round(rr * 0.5, 3))
-            print(f"  [tracker] ✅  {symbol} PUT  → T1  +{rr*0.5:.2f}R")
-        elif hi >= stop:
-            db.update_outcome(sig_id, "stopped", stop, -1.0)
-            print(f"  [tracker] ❌  {symbol} PUT  → Stop  −1R")
+        sym = sig.get("symbol", "?")
+        if ok:
+            print(f"  [tracker] ⌛ {sym} #{sig['id']} انتهى عقدها بلا حسم → expired")
+        else:
+            print(f"  [tracker] ↷ {sym} #{sig['id']} أُغلقت قبل الكتابة (أو فشل الطلب) — تُركت")

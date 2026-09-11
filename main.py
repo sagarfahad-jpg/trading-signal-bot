@@ -242,12 +242,12 @@ def _check_outcomes():
 
 
 def _outcome_loop():
-    # price_monitor (كل 45 ثانية) يدير دورة حياة الإشارات + تنبيهات Telegram.
-    # هذا اللوب يبقى كشبكة أمان للـ expiry فقط (كل 30 دقيقة).
+    # price_monitor (كل 45 ثانية) هو الحكم الوحيد على النتائج (T1/T2/Stop).
+    # هذا اللوب شبكة أمان للانتهاء فقط: يُنهي الصفقات المفتوحة بعد موت عقدها (كل 30 دقيقة).
     while True:
         time.sleep(30 * 60)
         try:
-            outcome_tracker.check_outcomes()   # expiry + safety net على Supabase
+            outcome_tracker.expire_stale()
         except Exception:
             pass
 
