@@ -564,6 +564,121 @@ def delete_my_trade(trade_id: int) -> bool:
     return False
 
 
+# ─── Shadow Gate (المرحلة ٢ — وضع الظل) ────────────────────────────────────
+# جدولان منفصلان (migrations/001_shadow_gate.sql). لا يمسّان signals ولا الحالات الحية.
+
+SHADOW_WATCHES = "shadow_watches"
+SHADOW_EVENTS  = "shadow_events"
+
+
+def _utc_now_iso() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def shadow_insert_watch(payload: dict) -> Optional[int]:
+    """يسجّل مراقبة ظل جديدة. يُرجع id الصف أو None."""
+    if not is_configured():
+        return None
+    try:
+        r = requests.post(
+            f"{_url()}/rest/v1/{SHADOW_WATCHES}",
+            headers=_headers(),
+            json=payload,
+            timeout=10,
+        )
+        if r.status_code in (200, 201):
+            d = r.json()
+            return d[0]["id"] if d else None
+        print(f"  [db] shadow_insert_watch: {r.status_code} {r.text[:200]}")
+    except Exception as e:
+        print(f"  [db] shadow_insert_watch error: {e}")
+    return None
+
+
+def shadow_update_watch(watch_id: int, fields: dict,
+                        expect_state: Optional[str] = None) -> bool:
+    """
+    يحدّث صف مراقبة. لو مُرِّر expect_state تُنفَّذ الكتابة فقط إذا كانت الحالة
+    الحالية تساويه (فلتر على الخادم — انتقال ذرّي، لا ازدواج بين حاويتين).
+    يُرجع False إذا لم يطابق أي صف.
+    """
+    if not is_configured() or not fields:
+        return False
+    payload = dict(fields)
+    payload["updated_at"] = _utc_now_iso()
+    url = f"{_url()}/rest/v1/{SHADOW_WATCHES}?id=eq.{watch_id}"
+    if expect_state:
+        url += f"&state=eq.{expect_state}"
+    try:
+        r = requests.patch(
+            url,
+            headers=_headers(prefer="return=representation"),
+            json=payload,
+            timeout=10,
+        )
+        if r.status_code not in (200, 201):
+            print(f"  [db] shadow_update_watch #{watch_id}: {r.status_code} {r.text[:200]}")
+            return False
+        try:
+            return len(r.json()) > 0
+        except Exception:
+            return False
+    except Exception as e:
+        print(f"  [db] shadow_update_watch error: {e}")
+    return False
+
+
+def shadow_get_watches(states: Optional[List[str]] = None,
+                       since_iso: Optional[str] = None,
+                       limit: int = 1000) -> List[Dict]:
+    """يجلب مراقبات الظل (بحالات محدّدة و/أو منذ وقت تسجيل)."""
+    if not is_configured():
+        return []
+    url = f"{_url()}/rest/v1/{SHADOW_WATCHES}?select=*&order=id.asc&limit={limit}"
+    if states:
+        url += f"&state=in.({','.join(states)})"
+    if since_iso:
+        url += f"&registered_at=gte.{since_iso}"
+    try:
+        r = requests.get(url, headers=_headers(prefer=""), timeout=10)
+        if r.status_code in (200, 206):
+            return r.json()
+        print(f"  [db] shadow_get_watches: {r.status_code} {r.text[:200]}")
+    except Exception as e:
+        print(f"  [db] shadow_get_watches error: {e}")
+    return []
+
+
+def shadow_insert_event(watch_id: int, kind: str, bar_ts: Optional[str] = None,
+                        state_before: Optional[str] = None,
+                        state_after: Optional[str] = None,
+                        checks: Optional[dict] = None) -> bool:
+    """يسجّل حدثاً. 409 (مكرّر على نفس watch/kind/bar) يُعامل كنجاح — idempotent."""
+    if not is_configured():
+        return False
+    payload = {
+        "watch_id":     watch_id,
+        "kind":         kind,
+        "bar_ts":       bar_ts,
+        "state_before": state_before,
+        "state_after":  state_after,
+        "checks":       checks,
+    }
+    try:
+        r = requests.post(
+            f"{_url()}/rest/v1/{SHADOW_EVENTS}",
+            headers=_headers(prefer="return=minimal"),
+            json=payload,
+            timeout=10,
+        )
+        if r.status_code in (200, 201, 204, 409):
+            return True
+        print(f"  [db] shadow_insert_event #{watch_id}/{kind}: {r.status_code} {r.text[:200]}")
+    except Exception as e:
+        print(f"  [db] shadow_insert_event error: {e}")
+    return False
+
+
 # ─── Read ─────────────────────────────────────────────────────────────────────
 
 def get_open_signals() -> List[Dict]:
