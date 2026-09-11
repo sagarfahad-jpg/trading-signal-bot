@@ -242,12 +242,12 @@ def _check_outcomes():
 
 
 def _outcome_loop():
-    # price_monitor (كل 45 ثانية) يدير دورة حياة الإشارات + تنبيهات Telegram.
-    # هذا اللوب يبقى كشبكة أمان للـ expiry فقط (كل 30 دقيقة).
+    # price_monitor (كل 45 ثانية) هو الحكم الوحيد على النتائج (T1/T2/Stop).
+    # هذا اللوب شبكة أمان للانتهاء فقط: يُنهي الصفقات المفتوحة بعد موت عقدها (كل 30 دقيقة).
     while True:
         time.sleep(30 * 60)
         try:
-            outcome_tracker.check_outcomes()   # expiry + safety net على Supabase
+            outcome_tracker.expire_stale()
         except Exception:
             pass
 
@@ -256,56 +256,87 @@ def _outcome_loop():
 
 _daily_summary_sent_date: str = ""
 
+_DECIDED = ("hit_t1", "hit_t2", "stopped", "manual_exit")
+
+
+def _dte_label(sig: dict) -> str:
+    """'0DTE' أو 'Nd' من expiry مقابل تاريخ الإشارة (ET) — فارغ إن لم يتوفّر."""
+    try:
+        exp     = datetime.strptime(str(sig.get("expiry") or "").replace("-", "")[:8], "%Y%m%d").date()
+        et      = pytz.timezone(config.TIMEZONE)
+        created = datetime.fromisoformat(
+            str(sig.get("created_at", "")).replace("Z", "+00:00")).astimezone(et).date()
+        days    = (exp - created).days
+        return "0DTE" if days <= 0 else f"{days}d"
+    except Exception:
+        return ""
+
+
+def _build_daily_summary(today_s: list, today: str) -> str:
+    """نص ملخص اليوم — المقياس الرئيسي ربح العقد (option_pnl_pct، mid-to-mid)."""
+    decided  = [s for s in today_s if s.get("status") in _DECIDED]
+    expired  = [s for s in today_s if s.get("status") == "expired" and s.get("entry_filled")]
+    open_cnt = len([s for s in today_s if s.get("status") == "open"])
+
+    # ── ربح العقد ──────────────────────────────────────────────────────────
+    with_pnl = [s for s in decided if s.get("option_pnl_pct") is not None]
+    no_pnl   = len(decided) - len(with_pnl)
+    pnls     = [float(s["option_pnl_pct"]) for s in with_pnl]
+    pnl_sum  = round(sum(pnls), 1)
+    pnl_avg  = round(pnl_sum / len(pnls), 1) if pnls else 0.0
+    pnl_wins = sum(1 for p in pnls if p > 0)
+    pnl_wr   = round(pnl_wins / len(pnls) * 100) if pnls else 0
+
+    # ── R السهم (ثانوي — لا يعبّر عن العقد) ────────────────────────────────
+    wins    = [s for s in decided if s.get("status") in ("hit_t1", "hit_t2")]
+    losses  = [s for s in decided if s.get("status") == "stopped"]
+    total_r = round(sum(float(s.get("r_multiple") or 0) for s in decided), 2)
+    wr_r    = round(len(wins) / len(decided) * 100) if decided else 0
+
+    best    = max(with_pnl, key=lambda x: float(x["option_pnl_pct"])) if with_pnl else None
+    worst   = min(with_pnl, key=lambda x: float(x["option_pnl_pct"])) if with_pnl else None
+    p_emoji = "📈" if pnl_sum >= 0 else "📉"
+
+    def _trade_line(tag: str, s: dict) -> str:
+        dte = _dte_label(s)
+        return (f"{tag}: {s['symbol']} {str(s.get('direction', '')).upper()} "
+                f"{float(s['option_pnl_pct']):+.0f}%" + (f" ({dte})" if dte else ""))
+
+    lines = [
+        f"📊 ملخص اليوم — {today}",
+        f"{'─'*30}",
+        f"إشارات: {len(today_s)}  |  محسومة: {len(decided)}  |  مفتوحة: {open_cnt}",
+        f"{'─'*30}",
+        "💵 ربح العقد (mid-to-mid)",
+        f"⚠️ بلا بيانات عقد: {no_pnl} من {len(decided)}",
+        f"{p_emoji} المجموع: {pnl_sum:+.1f}%  |  المتوسط: {pnl_avg:+.1f}%/صفقة  ({len(pnls)} صفقة)",
+        f"🎯 win-rate (pnl>0): {pnl_wr}%  ({pnl_wins}/{len(pnls)})",
+    ]
+    if expired:
+        lines.append(f"⌛ انتهى عقدها بلا حسم: {len(expired)}")
+    if best:
+        lines.append(_trade_line("⭐ الأفضل", best))
+    if worst and worst is not best:
+        lines.append(_trade_line("👎 الأسوأ", worst))
+    lines += [
+        f"{'─'*30}",
+        f"📐 R السهم (ثانوي): {total_r:+.2f}R  |  ✅ {len(wins)} ❌ {len(losses)}  WR {wr_r}%",
+    ]
+    return "\n".join(lines)
+
+
 def _send_daily_summary() -> None:
     """يرسل ملخص اليوم على Telegram بعد إغلاق السوق."""
     if not db.is_configured():
         return
     try:
-        et       = pytz.timezone(config.TIMEZONE)
-        today    = datetime.now(et).strftime("%Y-%m-%d")
-        signals  = db.get_all_signals(limit=300)
-        today_s  = [s for s in signals
-                    if str(s.get("created_at",""))[:10] == today]
+        et      = pytz.timezone(config.TIMEZONE)
+        today   = datetime.now(et).strftime("%Y-%m-%d")
+        signals = db.get_all_signals(limit=300)
+        today_s = [s for s in signals if str(s.get("created_at", ""))[:10] == today]
         if not today_s:
             return
-
-        decided  = [s for s in today_s
-                    if s.get("status") in ("hit_t1","hit_t2","stopped")]
-        wins     = [s for s in decided if s.get("status") in ("hit_t1","hit_t2")]
-        losses   = [s for s in decided if s.get("status") == "stopped"]
-        total_r  = round(sum(float(s.get("r_multiple") or 0) for s in decided), 2)
-        open_cnt = len([s for s in today_s if s.get("status") == "open"])
-
-        best = (max(decided, key=lambda x: float(x.get("r_multiple") or 0))
-                if decided else None)
-        worst= (min(decided, key=lambda x: float(x.get("r_multiple") or 0))
-                if decided else None)
-
-        r_sign  = "+" if total_r >= 0 else ""
-        r_emoji = "📈" if total_r >= 0 else "📉"
-        wr_pct  = round(len(wins)/len(decided)*100) if decided else 0
-
-        lines = [
-            f"📊 ملخص اليوم — {today}",
-            f"{'─'*30}",
-            f"إشارات: {len(today_s)}  |  محسومة: {len(decided)}  |  مفتوحة: {open_cnt}",
-            f"✅ فوز: {len(wins)}  ❌ خسارة: {len(losses)}  🎯 WR: {wr_pct}%",
-        ]
-        if best:
-            lines.append(
-                f"⭐ الأفضل: {best['symbol']} {best['direction'].upper()}"
-                f" +{float(best.get('r_multiple',0)):.1f}R"
-            )
-        if worst and worst != best:
-            lines.append(
-                f"👎 الأسوأ: {worst['symbol']} {worst['direction'].upper()}"
-                f" {float(worst.get('r_multiple',0)):.1f}R"
-            )
-        lines += [
-            f"{'─'*30}",
-            f"{r_emoji} إجمالي اليوم: {r_sign}{total_r}R",
-        ]
-        send("\n".join(lines), config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
+        send(_build_daily_summary(today_s, today), config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
         print("📊 أُرسل ملخص اليوم")
     except Exception as e:
         print(f"  [daily_summary] {e}")

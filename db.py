@@ -331,8 +331,14 @@ def update_outcome(
     highest_price: Optional[float] = None,
     exit_option_price: Optional[float] = None,
     option_pnl_pct: Optional[float] = None,
+    only_if_status: Optional[str] = None,
 ) -> bool:
-    """يحدّث نتيجة إشارة موجودة مع تفاصيل سلامة البيانات."""
+    """يحدّث نتيجة إشارة موجودة مع تفاصيل سلامة البيانات.
+
+    only_if_status: لو مُرّر، تُنفَّذ الكتابة فقط إذا كان status الحالي يساويه
+    (فلتر على الخادم — حماية ذرّية من الكتابة المزدوجة على صف أُغلق للتو).
+    في هذه الحالة يُرجع False إذا لم يطابق أي صف.
+    """
     if not is_configured():
         return False
 
@@ -359,8 +365,23 @@ def update_outcome(
     if option_pnl_pct is not None:
         payload["option_pnl_pct"] = round(option_pnl_pct, 2)
     try:
+        url = f"{_url()}/rest/v1/{TABLE}?id=eq.{signal_id}"
+        if only_if_status:
+            url += f"&status=eq.{only_if_status}"
+            r = requests.patch(
+                url,
+                headers=_headers(prefer="return=representation"),
+                json=payload,
+                timeout=10,
+            )
+            if r.status_code not in (200, 201):
+                return False
+            try:
+                return len(r.json()) > 0     # [] = الصف لم يعد بهذه الحالة — لم يُكتب شيء
+            except Exception:
+                return False
         r = requests.patch(
-            f"{_url()}/rest/v1/{TABLE}?id=eq.{signal_id}",
+            url,
             headers=_headers(prefer=""),
             json=payload,
             timeout=10,

@@ -234,6 +234,7 @@ pending ⏳ → دخول 🟢 → active 📈 → T1 ✓ → trailing → T2 ✅
 - **pending**: منطقة عريضة (`width_pct ≥ 0.5`) تنتظر النصف الأعمق؛ الضيقة يكفيها wick. `fill_price` = اللمسة الفعلية. تُلغى بعد `PENDING_MAX_HOURS = 24`.
 - **active**: تتبّع MFE/MAE بالـR؛ تنبيهات ربح `PCT_MILESTONES = [25, 50, 100]%` وتآكل `CONTRACT_LOSS_ALERTS = [-40, -60]%`.
 - **Trailing** بعد T1: `trail_gap = |target1 − entry| × 0.5`.
+- **`outcome_tracker.expire_stale()`** (كل 30 دقيقة من `main._outcome_loop`) = شبكة أمان للانتهاء **فقط** منذ 2026-09-11: يُنهي الصفقة المفتوحة التي مات عقدها (expiry أقدم من اليوم ET، أو اليوم نفسه بعد 16:15) بحالة `expired` و`exit_reason = contract_expired`، والكتابة مشروطة بـ `status = open` لحظة التنفيذ (فلتر على الخادم). حكمه القديم على T1/T2/Stop (أعلى/أدنى 5m من وقت الإشارة، الهدف قبل الوقف) أُزيل لأنه سجّل 220 "فوزاً" بنسبة 78% مقابل 24% للحكم الحي. **price_monitor هو الحكم الوحيد.**
 
 ### مفردات النتيجة (`status`) والـR-Multiple
 | status | متى | R-Multiple |
@@ -241,7 +242,7 @@ pending ⏳ → دخول 🟢 → active 📈 → T1 ✓ → trailing → T2 ✅
 | `hit_t2` | بلوغ الهدف الثاني | `+rr` كامل |
 | `hit_t1` | بلوغ T1 ثم وقف/trailing | `+rr × 0.5` |
 | `stopped` | الوقف قبل T1 | `−1.0` |
-| `expired` | انتهى دون حسم | `0.0` |
+| `expired` | مات عقدها دون حسم (`outcome_tracker`، `exit_reason = contract_expired`) — P&L العقد **مجهول** لا صفر | `0.0` |
 | `manual_exit` | خروج يدوي | R محسوبة لحظتها |
 
 ### الحقول المُسجَّلة (أمانة البيانات — `ed5930e`)

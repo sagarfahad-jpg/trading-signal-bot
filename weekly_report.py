@@ -51,8 +51,11 @@ def _load_from_supabase() -> list:
             "symbol":    r.get("symbol", "—"),
             "direction": r.get("direction", ""),
             "outcome":   _STATUS_MAP.get(r.get("status", "open"), ""),
-            "rr":        r.get("rr"),
-            "sent":      True,
+            "rr":             r.get("rr"),
+            "r_multiple":     r.get("r_multiple"),
+            "option_pnl_pct": r.get("option_pnl_pct"),
+            "entry_filled":   bool(r.get("entry_filled")),
+            "sent":           True,
         })
     return out
 
@@ -109,6 +112,19 @@ def generate_weekly_report(days: int = 7) -> str:
     resolved = wins_t2 + wins_t1 + losses
     wr       = round(((wins_t2 + wins_t1) / resolved * 100), 1) if resolved else 0.0
 
+    # ── ربح العقد (المقياس الرئيسي، mid-to-mid) ─────────────────────────────
+    resolved_e = [e for e in week_entries if e.get("outcome") in ("WIN_T2", "WIN_T1", "LOSS")]
+    pnls       = [float(e["option_pnl_pct"]) for e in resolved_e
+                  if e.get("option_pnl_pct") is not None]
+    no_pnl     = len(resolved_e) - len(pnls)
+    pnl_sum    = round(sum(pnls), 1)
+    pnl_avg    = round(pnl_sum / len(pnls), 1) if pnls else 0.0
+    pnl_wins   = sum(1 for p in pnls if p > 0)
+    pnl_wr     = round(pnl_wins / len(pnls) * 100, 1) if pnls else 0.0
+    r_sum      = round(sum(float(e.get("r_multiple") or 0) for e in resolved_e), 1)
+    expired_f  = sum(1 for e in week_entries
+                     if e.get("outcome") == "expired" and e.get("entry_filled"))
+
     # إحصاءات لكل أصل
     sym_stats: dict = defaultdict(lambda: {"wins": 0, "losses": 0, "signals": 0})
     for e in week_entries:
@@ -157,7 +173,12 @@ def generate_weekly_report(days: int = 7) -> str:
         f"❌ LOSS               : {losses}",
         f"⏳ لم تُحسم           : {open_s + expired}",
         "─────────────────────────────",
-        f"🎯 نسبة النجاح        : {wr}%  ({wins_t2 + wins_t1}/{resolved})",
+        "💵 ربح العقد (mid-to-mid):",
+        f"⚠️ بلا بيانات عقد         : {no_pnl} من {len(resolved_e)}",
+        f"📈 المجموع               : {pnl_sum:+.0f}%  |  متوسط {pnl_avg:+.1f}%/صفقة",
+        f"🎯 win-rate (pnl>0)       : {pnl_wr}%  ({pnl_wins}/{len(pnls)})",
+        f"⌛ انتهى عقدها بلا حسم    : {expired_f}",
+        f"📐 R السهم (ثانوي)        : {r_sum:+.1f}R  |  نجاح {wr}% ({wins_t2 + wins_t1}/{resolved})",
         best_line,
         worst_line,
         f"⚡ أعلى R:R           : {best_rr}",
