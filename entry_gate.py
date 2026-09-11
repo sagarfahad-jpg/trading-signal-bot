@@ -558,12 +558,18 @@ def r_actual(direction: str, entry: float, stop: float, outcome_price: float) ->
 def excursions(direction: str, bars: pd.DataFrame, entry: float, stop: float,
                extra_price: Optional[float] = None) -> dict:
     """MFE ≥ 0 و MAE ≤ 0 بالـ R من High/Low الشموع بين الدخول والخروج (+ سعر إضافي اختياري)."""
+    empty = {'max_favorable': 0.0, 'max_adverse': 0.0, 'highest_price': None, 'lowest_price': None}
     risk = (entry - stop) if direction == 'call' else (stop - entry)
-    if risk <= 0 or bars is None or len(bars) == 0:
-        return {'max_favorable': 0.0, 'max_adverse': 0.0, 'highest_price': None, 'lowest_price': None}
-    hi, lo = float(bars['High'].max()), float(bars['Low'].min())
+    if risk <= 0:
+        return empty
+    hi = lo = None
+    if bars is not None and len(bars):
+        hi, lo = float(bars['High'].max()), float(bars['Low'].min())
     if extra_price is not None:
-        hi, lo = max(hi, extra_price), min(lo, extra_price)
+        hi = extra_price if hi is None else max(hi, extra_price)
+        lo = extra_price if lo is None else min(lo, extra_price)
+    if hi is None:
+        return empty
     if direction == 'call':
         mfe, mae = (hi - entry) / risk, (lo - entry) / risk
     else:
