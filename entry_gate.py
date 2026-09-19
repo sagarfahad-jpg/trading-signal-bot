@@ -248,10 +248,14 @@ def ifvg_after(df: pd.DataFrame, pos: int, arrival_pos: int,
     Inversion FVG كحدث بعد الوصول: فجوة 5m في آخر IFVG_LOOKBACK شمعة حتى الشمعة
     المُقيَّمة، تتقاطع مع المنطقة، ويعبرها إغلاق جديد عند شمعة الوصول أو بعدها:
     الإغلاق الكاسر خلف الفجوة والإغلاق السابق له ليس خلفها.
-      call: فجوة هابطة (high[i] < low[i-2]) — الكسر إغلاق فوق حدّها العلوي low[i-2]
-      put : فجوة صاعدة (low[i] > high[i-2]) — الكسر إغلاق تحت حدّها السفلي high[i-2]
+      call: فجوة هابطة (bearish) — الكسر إغلاق فوق حدّها العلوي
+      put : فجوة صاعدة (bullish) — الكسر إغلاق تحت حدّها السفلي
+    الفجوات من _find_fvg نفسها (نفس فلاتر fvg): الحجم (dynamic threshold على الشمعة
+    الوسطى، محسوب على النافذة) + الإغلاق (الوسطى تُغلق خلف الشمعة الأولى) + mitigation
+    بمصدر _find_fvg الافتراضي (highlow): فجوة اخترقها ذيل قبل الوصول مستهلكة لا تُعدّ.
     سعر خلف الفجوة أصلاً قبل الوصول (انقلاب قديم) حالة قائمة لا تأكيد — ولو بقي خلفها
-    على شمعة الوصول. الفجوة نفسها قد تسبق الوصول؛ المطلوب أن يقع العبور بعده.
+    على شمعة الوصول. الفجوة نفسها قد تسبق الوصول؛ المطلوب أن تبقى حيّة حتى الوصول وأن
+    يقع العبور بعده.
     """
     start = max(0, pos + 1 - IFVG_LOOKBACK)
     w = df.iloc[start:pos + 1]
@@ -260,15 +264,13 @@ def ifvg_after(df: pd.DataFrame, pos: int, arrival_pos: int,
         return False
     since = max(0, int(arrival_pos) - start)
     up = direction == 'call'
+    want = 'bearish' if up else 'bullish'
     highs, lows, closes = w['High'].values, w['Low'].values, w['Close'].values
-    for i in range(2, n - 1):
-        if up and highs[i] < lows[i - 2]:
-            lo, hi = float(highs[i]), float(lows[i - 2])
-        elif (not up) and lows[i] > highs[i - 2]:
-            lo, hi = float(highs[i - 2]), float(lows[i])
-        else:
+    for lo, hi, t, i in _find_fvg(w, limit=n, track_mitigation=False, with_index=True):
+        if t != want or not (lo <= zone.high and hi >= zone.low):
             continue
-        if not (lo <= zone.high and hi >= zone.low):
+        spent = (highs[i + 1:since] > hi) if up else (lows[i + 1:since] < lo)
+        if spent.any():
             continue
         for j in range(max(i + 1, since), n):
             now_beyond  = closes[j] > hi if up else closes[j] < lo

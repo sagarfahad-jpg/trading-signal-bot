@@ -197,11 +197,81 @@ def test_ifvg_state_before_arrival_is_not_a_confirmation():
     assert eg.ifvg_after(df, pos=5, arrival_pos=4, zone=IFVG_ZONE, direction="call") is True
 
 
-def test_ifvg_fresh_recross_after_arrival_counts():
-    # رجع داخل الفجوة (99.3) ثم عبرها من جديد بعد الوصول (99.6): الإغلاق السابق ليس خلفها
+def test_ifvg_recross_of_gap_spent_before_arrival_does_not_count():
+    # عبرها عند 4 (قبل الوصول 5)، رجع داخلها (99.3) ثم عبرها من جديد بعد الوصول (99.6).
+    # العبور الثاني جديد، لكن الفجوة اختُرقت قبل الوصول (mitigation) → مستهلكة، ليست تأكيداً.
     df = bars(_ifvg_rows(99.3, 99.6))
-    assert eg.ifvg_after(df, pos=6, arrival_pos=5, zone=IFVG_ZONE, direction="call") is True
-    assert eg.ifvg_after(df, pos=5, arrival_pos=5, zone=IFVG_ZONE, direction="call") is False
+    assert eg.ifvg_after(df, pos=6, arrival_pos=5, zone=IFVG_ZONE, direction="call") is False
+    assert eg.ifvg_after(df, pos=6, arrival_pos=4, zone=IFVG_ZONE, direction="call") is True
+
+
+# ── ifvg عبر فلاتر _find_fvg (الحجم، الإغلاق، mitigation) ─────────────────
+
+def _ctx(n=8):
+    """شموع سياق بجسم 0.4 متناوب وذيول 0.05 — بلا فجوات."""
+    up, dn = [99.8, 100.25, 99.75, 100.2, 1000], [100.2, 100.25, 99.75, 99.8, 1000]
+    return [up if k % 2 == 0 else dn for k in range(n)]
+
+
+FILTER_ZONE = GateZone(low=99.5, high=99.88, direction="demand")
+CROSS = [99.8, 100.0, 99.78, 99.95, 1000]           # عبور جديد فوق 99.9 (السابق 99.8)
+
+
+def _assert_raw_gap_and_fresh_cross(df, c0, c2, cross):
+    assert df["High"].iloc[c2] < df["Low"].iloc[c0]                  # فجوة خام (كانت تُقبل)
+    top = df["Low"].iloc[c0]
+    assert df["Close"].iloc[cross] > top >= df["Close"].iloc[cross - 1]
+
+
+def test_ifvg_quiet_middle_candle_fails_size_filter():
+    rows = _ctx() + [[100.0, 100.05, 99.9, 99.95, 1000],             # c0 (low 99.9)
+                     [99.95, 99.95, 99.7, 99.75, 1000],              # c1 جسم 0.2% < العتبة (~0.6%)
+                     [99.75, 99.85, 99.6, 99.8, 1000],               # c2 → فجوة خام (99.85, 99.9)
+                     CROSS]
+    df = bars(rows)
+    _assert_raw_gap_and_fresh_cross(df, 8, 10, 11)
+    assert eg.ifvg_after(df, pos=11, arrival_pos=9, zone=FILTER_ZONE, direction="call") is False
+
+
+def test_ifvg_wick_only_gap_fails_close_filter():
+    rows = _ctx() + [[100.0, 100.05, 99.9, 99.95, 1000],             # c0 (low 99.9)
+                     [101.0, 101.05, 99.3, 99.95, 1000],             # c1 جسم كبير لكن يُغلق فوق 99.9
+                     [99.75, 99.85, 99.6, 99.8, 1000],               # c2 → فجوة خام (99.85, 99.9)
+                     CROSS]
+    df = bars(rows)
+    _assert_raw_gap_and_fresh_cross(df, 8, 10, 11)
+    assert eg.ifvg_after(df, pos=11, arrival_pos=9, zone=FILTER_ZONE, direction="call") is False
+
+
+def test_ifvg_gap_wicked_through_before_arrival_is_spent():
+    # فجوة (98.0, 99.5) بإزاحة حقيقية؛ ذيل 99.6 فوقها قبل الوصول بلا إغلاق، ثم عبور جديد بعده
+    def rows(pre_high):
+        return [[100.0, 101.0, 99.5, 100.0, 1000],
+                [100.0, 100.0, 97.0, 97.5, 1000],
+                [97.5, 98.0, 97.0, 97.6, 1000],                      # bearish FVG: (98.0, 99.5)
+                [97.6, pre_high, 97.5, 98.5, 1000],                  # قبل الوصول
+                [98.5, 99.0, 98.3, 98.9, 1000],                      # الوصول
+                [98.9, 99.9, 98.8, 99.8, 1000]]                      # عبور جديد فوق 99.5
+    assert eg.ifvg_after(bars(rows(99.6)), pos=5, arrival_pos=4, zone=IFVG_ZONE, direction="call") is False
+    assert eg.ifvg_after(bars(rows(99.4)), pos=5, arrival_pos=4, zone=IFVG_ZONE, direction="call") is True
+
+
+def test_find_fvg_with_index_is_backward_compatible():
+    import numpy as np
+    from market_structure import _find_fvg
+    rng = np.random.default_rng(3)
+    c = 100 + np.cumsum(rng.normal(0, 0.4, 300))
+    o = np.r_[100, c[:-1]]
+    h, l = np.maximum(o, c) + rng.random(300) * 0.3, np.minimum(o, c) - rng.random(300) * 0.3
+    df = bars([[o[k], h[k], l[k], c[k], 1000] for k in range(300)])
+    for kw in ({}, {"track_mitigation": False}, {"limit": 300}):
+        plain, idx = _find_fvg(df, **kw), _find_fvg(df, with_index=True, **kw)
+        assert plain and [t[:3] for t in idx] == plain
+    for lo, hi, t, i in _find_fvg(df, limit=300, track_mitigation=False, with_index=True):
+        if t == "bearish":
+            assert (lo, hi) == (df["High"].iloc[i], df["Low"].iloc[i - 2])
+        else:
+            assert (lo, hi) == (df["High"].iloc[i - 2], df["Low"].iloc[i])
 
 
 def test_ifvg_put_mirror_state_vs_event():
