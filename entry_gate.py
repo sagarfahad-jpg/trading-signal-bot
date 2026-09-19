@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 import pytz
 
-from htf_zones import (cisd_5m, displacement_5m, inversion_fvg_confirms_zone)
+from htf_zones import cisd_5m, displacement_5m
 from market_structure import (_find_fvg, _pivot_levels, detect_structure_dual,
                               detect_equal_levels, prev_period_levels)
 
@@ -40,6 +40,7 @@ ENTRY_CUTOFF_ET    = (15, 0)    # لا دخول (ولا انتظار) بعد 15:
 SESSION_OPEN_ET    = (9, 30)
 SESSION_CLOSE_ET   = (16, 0)
 REJECTION_LOOKBACK = 5          # أطول ذيل مماثل في آخر ٥ شموع
+IFVG_LOOKBACK      = 40         # نافذة البحث عن الفجوة (نفس inversion_fvg_confirms_zone)
 MIN_T1_R           = 1.0        # الهدف الأول يبعد ≥ 1R
 MIN_T1_ATR         = 0.5        # و ≥ 0.5×ATR (تجاهل المستويات المجهرية)
 MAX_T1_R           = 4.0        # نفس سقف MAX_RR في analyzer
@@ -217,9 +218,38 @@ def cisd_after(df: pd.DataFrame, pos: int, direction: str) -> bool:
 
 def ifvg_after(df: pd.DataFrame, pos: int, arrival_pos: int,
                zone: GateZone, direction: str) -> bool:
-    """فجوة منقلبة تتقاطع مع المنطقة، إغلاقها الكاسر عند شمعة الوصول أو بعدها."""
-    return bool(inversion_fvg_confirms_zone(df.iloc[:pos + 1], zone, direction,
-                                            since_idx=arrival_pos))
+    """
+    Inversion FVG كحدث بعد الوصول: فجوة 5m في آخر IFVG_LOOKBACK شمعة حتى الشمعة
+    المُقيَّمة، تتقاطع مع المنطقة، ويعبرها إغلاق جديد عند شمعة الوصول أو بعدها:
+    الإغلاق الكاسر خلف الفجوة والإغلاق السابق له ليس خلفها.
+      call: فجوة هابطة (high[i] < low[i-2]) — الكسر إغلاق فوق حدّها العلوي low[i-2]
+      put : فجوة صاعدة (low[i] > high[i-2]) — الكسر إغلاق تحت حدّها السفلي high[i-2]
+    سعر خلف الفجوة أصلاً قبل الوصول (انقلاب قديم) حالة قائمة لا تأكيد — ولو بقي خلفها
+    على شمعة الوصول. الفجوة نفسها قد تسبق الوصول؛ المطلوب أن يقع العبور بعده.
+    """
+    start = max(0, pos + 1 - IFVG_LOOKBACK)
+    w = df.iloc[start:pos + 1]
+    n = len(w)
+    if n < 6:
+        return False
+    since = max(0, int(arrival_pos) - start)
+    up = direction == 'call'
+    highs, lows, closes = w['High'].values, w['Low'].values, w['Close'].values
+    for i in range(2, n - 1):
+        if up and highs[i] < lows[i - 2]:
+            lo, hi = float(highs[i]), float(lows[i - 2])
+        elif (not up) and lows[i] > highs[i - 2]:
+            lo, hi = float(highs[i - 2]), float(lows[i])
+        else:
+            continue
+        if not (lo <= zone.high and hi >= zone.low):
+            continue
+        for j in range(max(i + 1, since), n):
+            now_beyond  = closes[j] > hi if up else closes[j] < lo
+            prev_beyond = closes[j - 1] > hi if up else closes[j - 1] < lo
+            if now_beyond and not prev_beyond:
+                return True
+    return False
 
 
 def fvg_after(df: pd.DataFrame, pos: int, arrival_pos: int,

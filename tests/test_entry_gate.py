@@ -173,21 +173,82 @@ def test_cisd_confirmation_after_sweep_and_reclaim():
     assert decs[2].details["close_loc"] == "beyond"
 
 
-def test_ifvg_since_idx_requires_post_arrival_inversion_close():
-    rows = [[100.0, 101.0, 99.5, 100.0, 1000],
+IFVG_ZONE = GateZone(low=98.2, high=99.0, direction="demand")
+
+
+def _ifvg_rows(c5, c6):
+    """فجوة هابطة (98.0, 99.5) — c0 الشمعة 0 و c2 الشمعة 2 — أول إغلاق فوقها عند الشمعة 4."""
+    return [[100.0, 101.0, 99.5, 100.0, 1000],
             [100.0, 100.0, 97.0, 97.5, 1000],
             [97.5, 98.0, 97.0, 97.6, 1000],         # bearish FVG: (98.0, 99.5)
             [97.6, 98.6, 97.5, 98.5, 1000],
-            [98.5, 99.9, 98.4, 99.8, 1000],         # إغلاق فوق الفجوة (انقلاب) عند j=4
-            [99.8, 99.9, 99.2, 99.3, 1000],
-            [99.3, 99.5, 99.1, 99.2, 1000]]
+            [98.5, 99.9, 98.4, 99.8, 1000],         # j=4: العبور فوق 99.5
+            [99.8, 99.9, 99.2, c5, 1000],
+            [c5, 99.9, 99.1, c6, 1000]]
+
+
+def test_ifvg_state_before_arrival_is_not_a_confirmation():
+    # النسخة السابقة نجحت عرضاً: إغلاقا 5 و6 (99.3، 99.2) عادا داخل الفجوة فلم يبقَ إغلاق فوقها
+    # بعد الوصول. هنا يبقى السعر فوقها بعد عبور سبق الوصول — حالة قائمة لا حدث.
+    df = bars(_ifvg_rows(99.6, 99.55))
+    assert inversion_fvg_confirms_zone(df, IFVG_ZONE, "call") is True       # المحلّل: لم يتغيّر
+    assert eg.ifvg_after(df, pos=6, arrival_pos=5, zone=IFVG_ZONE, direction="call") is False
+    assert eg.ifvg_after(df, pos=6, arrival_pos=4, zone=IFVG_ZONE, direction="call") is True
+    assert eg.ifvg_after(df, pos=5, arrival_pos=4, zone=IFVG_ZONE, direction="call") is True
+
+
+def test_ifvg_fresh_recross_after_arrival_counts():
+    # رجع داخل الفجوة (99.3) ثم عبرها من جديد بعد الوصول (99.6): الإغلاق السابق ليس خلفها
+    df = bars(_ifvg_rows(99.3, 99.6))
+    assert eg.ifvg_after(df, pos=6, arrival_pos=5, zone=IFVG_ZONE, direction="call") is True
+    assert eg.ifvg_after(df, pos=5, arrival_pos=5, zone=IFVG_ZONE, direction="call") is False
+
+
+def test_ifvg_put_mirror_state_vs_event():
+    rows = [[100.0, 100.5, 99.0, 100.0, 1000],
+            [100.0, 103.0, 100.0, 102.5, 1000],
+            [102.5, 103.0, 102.0, 102.4, 1000],     # bullish FVG: (100.5, 102.0)
+            [102.4, 102.5, 101.4, 101.5, 1000],
+            [101.5, 101.6, 100.1, 100.2, 1000],     # j=4: العبور تحت 100.5
+            [100.2, 100.8, 99.9, 100.4, 1000],      # يبقى تحتها
+            [100.4, 100.7, 99.8, 100.3, 1000]]
     df = bars(rows)
-    zone = GateZone(low=98.2, high=99.0, direction="demand")
-    assert inversion_fvg_confirms_zone(df, zone, "call") is True                 # السلوك الأصلي
-    assert inversion_fvg_confirms_zone(df, zone, "call", since_idx=4) is True
-    assert inversion_fvg_confirms_zone(df, zone, "call", since_idx=5) is False
-    assert eg.ifvg_after(df, pos=6, arrival_pos=4, zone=zone, direction="call") is True
-    assert eg.ifvg_after(df, pos=6, arrival_pos=5, zone=zone, direction="call") is False
+    zone = GateZone(low=101.0, high=101.8, direction="supply")
+    assert eg.ifvg_after(df, pos=6, arrival_pos=4, zone=zone, direction="put") is True
+    assert eg.ifvg_after(df, pos=6, arrival_pos=5, zone=zone, direction="put") is False
+
+
+def test_second_visit_old_inverted_gap_does_not_confirm_on_arrival():
+    # فجوة (99.6, 99.9) داخل المنطقة عُبرت 10:45، ثم الوصول 11:35 بذيل يلمس المنطقة ويُغلق فوقها.
+    # قبل الإصلاح: enter/ifvg على الشمعة ١.
+    zone = GateZone(low=99.0, high=100.0, direction="demand", timeframe="daily", zone_type="ob")
+    rows = [[101.0, 101.2, 100.8, 101.0, 1000]] * 6          # 10:00–10:25
+    rows += [[101.0, 101.0, 99.9, 100.0, 1000],               # 10:30
+             [100.0, 100.0, 99.2, 99.3, 1000],                # 10:35
+             [99.3, 99.6, 99.1, 99.5, 1000],                  # 10:40: high 99.6 < low(10:30) 99.9
+             [99.5, 100.3, 99.4, 100.2, 1000],                # 10:45: العبور الفعلي
+             [100.2, 101.0, 100.1, 100.9, 1000]]              # 10:50
+    rows += [[100.9, 101.3, 100.7, 101.1, 1000]] * 8          # 10:55–11:30
+    rows += [[101.1, 101.2, 99.95, 100.4, 1000]]              # 11:35: الوصول
+    df = bars(rows)
+    st, decs = run(df, armed("call", zone), [len(df) - 1])
+    d = decs[-1]
+    assert d.touched and d.bars_seen == 1
+    assert d.checks["ifvg"] is False and d.action == "none" and st["state"] == "touched"
+
+
+def test_ifvg_event_after_arrival_enters():
+    # الهبوط للمنطقة يصنع فجوة هابطة (100.2, 100.6) تتقاطع معها؛ 10:45 يُغلق فوقها والسابق تحتها
+    zone = GateZone(low=99.0, high=100.4, direction="demand", timeframe="daily", zone_type="ob")
+    rows = flat(12, o=101.0, h=101.2, l=100.9, c=101.0)      # 09:30–10:25
+    rows += [[101.0, 101.1, 100.6, 100.7, 1000],              # 10:30 c0
+             [100.7, 100.7, 99.7, 99.8, 1000],                # 10:35 c1 — الوصول
+             [99.8, 100.2, 99.6, 99.9, 1000],                 # 10:40 c2 → فجوة (100.2, 100.6)
+             [99.9, 100.9, 99.85, 100.8, 1000]]               # 10:45 العبور
+    df = bars(rows, start="2026-09-10 09:30")
+    st, decs = run(df, armed("call", zone), range(12, 16))
+    assert decs[1].touched and [d.action for d in decs[1:3]] == ["none", "none"]
+    assert st["state"] == "entered" and decs[-1].reason == "ifvg" and decs[-1].bars_seen == 3
 
 
 def test_fvg_formed_after_arrival_confirms():
