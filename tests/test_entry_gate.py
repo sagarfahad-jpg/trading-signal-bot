@@ -173,6 +173,56 @@ def test_cisd_confirmation_after_sweep_and_reclaim():
     assert decs[2].details["close_loc"] == "beyond"
 
 
+# cisd: 20 شمعة مرجع (قمة 101، قاع 99) ثم مسح ثم تحوّل
+CISD_CTX = flat(20, o=100.0, h=101.0, l=99.0, c=100.0)
+SWEEP_DN, RECLAIM = [99.3, 99.4, 98.4, 99.0, 1000], [99.0, 101.3, 98.95, 101.2, 1000]
+SWEEP_UP, BREAKDN = [100.7, 101.6, 100.6, 101.0, 1000], [101.0, 101.05, 98.7, 98.8, 1000]
+
+
+def test_cisd_completed_before_arrival_is_not_a_confirmation():
+    # التحوّل اكتمل على شمعة 101.2 قبل الوصول؛ شمعة الوصول تلمس المنطقة بذيل وتبقى فوق المستوى
+    zone = GateZone(low=98.5, high=99.2, direction="demand")
+    df = bars(CISD_CTX + [SWEEP_DN, RECLAIM, [101.2, 101.3, 99.1, 101.1, 1000]])
+    pos = len(df) - 1
+    from htf_zones import cisd_5m
+    assert cisd_5m(df.iloc[:pos + 1])[0] is True                 # الحالة (المحلّل): صحيحة
+    st, decs = run(df, armed("call", zone), [pos])
+    assert decs[-1].touched and decs[-1].checks["cisd"] is False and decs[-1].action == "none"
+
+
+def test_cisd_reclaim_on_arrival_bar_is_an_event():
+    zone = GateZone(low=101.0, high=101.25, direction="demand")
+    df = bars(CISD_CTX + [SWEEP_DN, RECLAIM])
+    st, decs = run(df, armed("call", zone), [len(df) - 1])
+    assert st["state"] == "entered" and decs[-1].reason == "cisd" and decs[-1].bars_seen == 1
+
+
+def test_cisd_put_mirror_state_vs_event():
+    df = bars(CISD_CTX + [SWEEP_UP, BREAKDN, [98.8, 100.9, 98.7, 98.85, 1000]])
+    st, decs = run(df, armed("put", GateZone(low=100.8, high=101.5, direction="supply")), [len(df) - 1])
+    assert decs[-1].touched and decs[-1].checks["cisd"] is False and decs[-1].action == "none"
+    df = bars(CISD_CTX + [SWEEP_UP, BREAKDN])
+    st, decs = run(df, armed("put", GateZone(low=100.9, high=101.05, direction="supply")), [len(df) - 1])
+    assert st["state"] == "entered" and decs[-1].reason == "cisd" and decs[-1].bars_seen == 1
+
+
+def test_cisd_5m_default_unchanged_and_fresh_is_subset():
+    import numpy as np
+    from htf_zones import cisd_5m
+    rng = np.random.default_rng(5)
+    c = 100 + np.cumsum(rng.normal(0, 0.5, 400))
+    o = np.r_[100, c[:-1]]
+    h, l = np.maximum(o, c) + rng.random(400) * 0.4, np.minimum(o, c) - rng.random(400) * 0.4
+    df = bars([[o[k], h[k], l[k], c[k], 1000] for k in range(400)])
+    persisted = 0
+    for k in range(25, 401):
+        d, f = cisd_5m(df.iloc[:k]), cisd_5m(df.iloc[:k], fresh=True)
+        assert d == cisd_5m(df.iloc[:k], fresh=False)
+        assert (f[0] <= d[0]) and (f[1] <= d[1])                # الحدث ⊂ الحالة
+        persisted += (d[0] and not f[0]) + (d[1] and not f[1])
+    assert persisted > 0                                        # حالات قائمة يلتقطها الافتراضي
+
+
 IFVG_ZONE = GateZone(low=98.2, high=99.0, direction="demand")
 
 

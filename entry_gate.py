@@ -237,8 +237,12 @@ def rejection(df: pd.DataFrame, pos: int, zone: GateZone, direction: str,
 
 
 def cisd_after(df: pd.DataFrame, pos: int, direction: str) -> bool:
-    """cisd_5m على الشموع حتى الشمعة المُقيَّمة (إغلاق التأكيد بعد الوصول بالبناء)."""
-    bull, bear = cisd_5m(df.iloc[:pos + 1])
+    """
+    CISD كحدث على الشمعة المُقيَّمة: شرط cisd_5m صحيح وإغلاقها هو عبور مستوى التحوّل
+    (الإغلاق السابق لم يكن خلفه — fresh=True). تحوّل اكتمل قبل الوصول وبقي السعر خلف
+    مستواه حالة قائمة لا تأكيد.
+    """
+    bull, bear = cisd_5m(df.iloc[:pos + 1], fresh=True)
     return bool(bull if direction == 'call' else bear)
 
 

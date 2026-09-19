@@ -157,7 +157,7 @@ def nearest_zone(
 
 # ─── LTF Confirmations (5m) ───────────────────────────────────────────────────
 
-def cisd_5m(df: pd.DataFrame, lookback: int = 15) -> Tuple[bool, bool]:
+def cisd_5m(df: pd.DataFrame, lookback: int = 15, fresh: bool = False) -> Tuple[bool, bool]:
     """
     CISD (Change in State of Delivery) على الـ 5m:
 
@@ -168,6 +168,10 @@ def cisd_5m(df: pd.DataFrame, lookback: int = 15) -> Tuple[bool, bool]:
     Bearish CISD:
       - آخر 5 شموع تكسر قمة مرجعية
       - ثم تُغلق تحت قاع مرجعي
+
+    الافتراضي حالة (analyze): يبقى صحيحاً ما دام المسح ضمن آخر 5 شموع والإغلاق خلف المستوى،
+    ولو اكتمل التحوّل قبل شموع. fresh=True (بوابة الدخول): حدث — الإغلاق الأخير هو العبور
+    نفسه، والإغلاق السابق له لم يكن خلف مستوى التحوّل (بنفس المرجع).
     """
     if len(df) < lookback + 5:
         return False, False
@@ -187,6 +191,11 @@ def cisd_5m(df: pd.DataFrame, lookback: int = 15) -> Tuple[bool, bool]:
     bull = (r_low  < ref_low  * 0.9998) and (r_close > ref_high * 0.9990)
     # Bearish: مسح القمة + إغلاق تحت القاع
     bear = (r_high > ref_high * 1.0002) and (r_close < ref_low  * 1.0010)
+
+    if fresh:
+        p_close = float(df['Close'].iloc[-2])
+        bull = bull and p_close <= ref_high * 0.9990
+        bear = bear and p_close >= ref_low  * 1.0010
 
     return bool(bull), bool(bear)
 
