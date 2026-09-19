@@ -4,7 +4,8 @@ Entry Gate — بوابة الدخول بالتأكيد عند منطقة HTF (�
 منطق نقي بالكامل: DataFrame + حالة → قرار. لا شبكة، لا Supabase، لا Telegram.
 يستهلكه shadow_gate.py (وضع الظل)، ومستقبلاً price_monitor عند التحويل الحي.
 
-التدفّق (يُقيَّم على شموع 5m مُغلقة داخل الجلسة 09:30–16:00 ET فقط):
+التدفّق (يُقيَّم على شموع 5m مُغلقة داخل الجلسة 09:30–16:00 ET فقط، ونوافذ التأكيد
+الأربع ترى شموع الجلسة فقط — run_checks/session_view):
   armed   → أول شمعة يتداخل مداها مع منطقة HTF          → touched (شمعة ١ من ٦)
   touched → eod | break | تأكيد (rejection→cisd→ifvg→fvg) | timeout عند الشمعة ٦
   entered → T2 / Stop / T1 ثم Trailing (نفس قواعد price_monitor._check)
@@ -25,7 +26,7 @@ import numpy as np
 import pandas as pd
 import pytz
 
-from htf_zones import (cisd_5m, displacement_5m, inversion_fvg_confirms_zone)
+from htf_zones import cisd_5m, displacement_5m
 from market_structure import (_find_fvg, _pivot_levels, detect_structure_dual,
                               detect_equal_levels, prev_period_levels)
 
@@ -40,6 +41,7 @@ ENTRY_CUTOFF_ET    = (15, 0)    # لا دخول (ولا انتظار) بعد 15:
 SESSION_OPEN_ET    = (9, 30)
 SESSION_CLOSE_ET   = (16, 0)
 REJECTION_LOOKBACK = 5          # أطول ذيل مماثل في آخر ٥ شموع
+IFVG_LOOKBACK      = 40         # نافذة البحث عن الفجوة (نفس inversion_fvg_confirms_zone)
 MIN_T1_R           = 1.0        # الهدف الأول يبعد ≥ 1R
 MIN_T1_ATR         = 0.5        # و ≥ 0.5×ATR (تجاهل المستويات المجهرية)
 MAX_T1_R           = 4.0        # نفس سقف MAX_RR في analyzer
@@ -131,6 +133,31 @@ def candidate_positions(df: pd.DataFrame, since_ts=None, last_bar_ts=None) -> Li
     return out
 
 
+def session_mask(index) -> np.ndarray:
+    """متّجه: True لكل شمعة تبدأ داخل [09:30, 16:00) ET — نفس is_session_bar."""
+    idx = pd.DatetimeIndex(index)
+    idx = idx.tz_localize(ET) if idx.tz is None else idx.tz_convert(ET)
+    m = idx.hour * 60 + idx.minute
+    lo = SESSION_OPEN_ET[0] * 60 + SESSION_OPEN_ET[1]
+    hi = SESSION_CLOSE_ET[0] * 60 + SESSION_CLOSE_ET[1]
+    return np.asarray((m >= lo) & (m < hi))
+
+
+def session_view(df: pd.DataFrame, pos: int,
+                 arrival_pos: int) -> Optional[Tuple[pd.DataFrame, int, int]]:
+    """
+    شموع الجلسة فقط حتى pos (IEX يضم ما قبل/بعد الجلسة) → (sdf, spos, sarr):
+    موضع الشمعة المُقيَّمة وشمعة الوصول داخل sdf. None لو pos نفسها خارج الجلسة.
+    """
+    mask = session_mask(df.index[:pos + 1])
+    if not len(mask) or not mask[-1]:
+        return None
+    sdf = df.iloc[:pos + 1][mask]
+    spos = len(sdf) - 1
+    sarr = min(int(mask[:max(0, int(arrival_pos))].sum()), spos)
+    return sdf, spos, sarr
+
+
 def floor_5m(ts) -> pd.Timestamp:
     """يعيد بداية الشمعة 5m التي تحتوي هذا الوقت (لتحديد أول شمعة مرشّحة بعد التسجيل)."""
     t = to_et(ts)
@@ -210,16 +237,51 @@ def rejection(df: pd.DataFrame, pos: int, zone: GateZone, direction: str,
 
 
 def cisd_after(df: pd.DataFrame, pos: int, direction: str) -> bool:
-    """cisd_5m على الشموع حتى الشمعة المُقيَّمة (إغلاق التأكيد بعد الوصول بالبناء)."""
-    bull, bear = cisd_5m(df.iloc[:pos + 1])
+    """
+    CISD كحدث على الشمعة المُقيَّمة: شرط cisd_5m صحيح وإغلاقها هو عبور مستوى التحوّل
+    (الإغلاق السابق لم يكن خلفه — fresh=True). تحوّل اكتمل قبل الوصول وبقي السعر خلف
+    مستواه حالة قائمة لا تأكيد.
+    """
+    bull, bear = cisd_5m(df.iloc[:pos + 1], fresh=True)
     return bool(bull if direction == 'call' else bear)
 
 
 def ifvg_after(df: pd.DataFrame, pos: int, arrival_pos: int,
                zone: GateZone, direction: str) -> bool:
-    """فجوة منقلبة تتقاطع مع المنطقة، إغلاقها الكاسر عند شمعة الوصول أو بعدها."""
-    return bool(inversion_fvg_confirms_zone(df.iloc[:pos + 1], zone, direction,
-                                            since_idx=arrival_pos))
+    """
+    Inversion FVG كحدث بعد الوصول: فجوة 5m في آخر IFVG_LOOKBACK شمعة حتى الشمعة
+    المُقيَّمة، تتقاطع مع المنطقة، ويعبرها إغلاق جديد عند شمعة الوصول أو بعدها:
+    الإغلاق الكاسر خلف الفجوة والإغلاق السابق له ليس خلفها.
+      call: فجوة هابطة (bearish) — الكسر إغلاق فوق حدّها العلوي
+      put : فجوة صاعدة (bullish) — الكسر إغلاق تحت حدّها السفلي
+    الفجوات من _find_fvg نفسها (نفس فلاتر fvg): الحجم (dynamic threshold على الشمعة
+    الوسطى، محسوب على النافذة) + الإغلاق (الوسطى تُغلق خلف الشمعة الأولى) + mitigation
+    بمصدر _find_fvg الافتراضي (highlow): فجوة اخترقها ذيل قبل الوصول مستهلكة لا تُعدّ.
+    سعر خلف الفجوة أصلاً قبل الوصول (انقلاب قديم) حالة قائمة لا تأكيد — ولو بقي خلفها
+    على شمعة الوصول. الفجوة نفسها قد تسبق الوصول؛ المطلوب أن تبقى حيّة حتى الوصول وأن
+    يقع العبور بعده.
+    """
+    start = max(0, pos + 1 - IFVG_LOOKBACK)
+    w = df.iloc[start:pos + 1]
+    n = len(w)
+    if n < 6:
+        return False
+    since = max(0, int(arrival_pos) - start)
+    up = direction == 'call'
+    want = 'bearish' if up else 'bullish'
+    highs, lows, closes = w['High'].values, w['Low'].values, w['Close'].values
+    for lo, hi, t, i in _find_fvg(w, limit=n, track_mitigation=False, with_index=True):
+        if t != want or not (lo <= zone.high and hi >= zone.low):
+            continue
+        spent = (highs[i + 1:since] > hi) if up else (lows[i + 1:since] < lo)
+        if spent.any():
+            continue
+        for j in range(max(i + 1, since), n):
+            now_beyond  = closes[j] > hi if up else closes[j] < lo
+            prev_beyond = closes[j - 1] > hi if up else closes[j - 1] < lo
+            if now_beyond and not prev_beyond:
+                return True
+    return False
 
 
 def fvg_after(df: pd.DataFrame, pos: int, arrival_pos: int,
@@ -241,13 +303,22 @@ def fvg_after(df: pd.DataFrame, pos: int, arrival_pos: int,
 
 def run_checks(df: pd.DataFrame, pos: int, arrival_pos: int, zone: GateZone,
                direction: str, atr: float) -> dict:
-    """كل الأعلام تُحسب وتُسجَّل (displacement علم فقط لا يُدخِل)."""
+    """
+    كل الأعلام تُحسب وتُسجَّل (displacement علم فقط لا يُدخِل) على شموع الجلسة فقط:
+    شموع ما قبل/بعد الجلسة لا تدخل أي نافذة تأكيد (ذيول rejection السابقة، مرجع cisd،
+    فجوات ifvg/fvg) — قبل الافتتاح تمتد النافذة لآخر شموع جلسة اليوم السابق.
+    """
+    view = session_view(df, pos, arrival_pos)
+    if view is None:
+        return {'rejection': {'ok': False, 'outside_session': True}, 'cisd': False,
+                'ifvg': False, 'fvg': False, 'displacement': False}
+    sdf, spos, sarr = view
     return {
-        'rejection':    rejection(df, pos, zone, direction),
-        'cisd':         cisd_after(df, pos, direction),
-        'ifvg':         ifvg_after(df, pos, arrival_pos, zone, direction),
-        'fvg':          fvg_after(df, pos, arrival_pos, zone, direction),
-        'displacement': bool(displacement_5m(df.iloc[:pos + 1], direction, atr)),
+        'rejection':    rejection(sdf, spos, zone, direction),
+        'cisd':         cisd_after(sdf, spos, direction),
+        'ifvg':         ifvg_after(sdf, spos, sarr, zone, direction),
+        'fvg':          fvg_after(sdf, spos, sarr, zone, direction),
+        'displacement': bool(displacement_5m(sdf.iloc[:spos + 1], direction, atr)),
     }
 
 

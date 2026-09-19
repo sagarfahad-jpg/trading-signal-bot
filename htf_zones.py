@@ -157,7 +157,7 @@ def nearest_zone(
 
 # ─── LTF Confirmations (5m) ───────────────────────────────────────────────────
 
-def cisd_5m(df: pd.DataFrame, lookback: int = 15) -> Tuple[bool, bool]:
+def cisd_5m(df: pd.DataFrame, lookback: int = 15, fresh: bool = False) -> Tuple[bool, bool]:
     """
     CISD (Change in State of Delivery) على الـ 5m:
 
@@ -168,6 +168,10 @@ def cisd_5m(df: pd.DataFrame, lookback: int = 15) -> Tuple[bool, bool]:
     Bearish CISD:
       - آخر 5 شموع تكسر قمة مرجعية
       - ثم تُغلق تحت قاع مرجعي
+
+    الافتراضي حالة (analyze): يبقى صحيحاً ما دام المسح ضمن آخر 5 شموع والإغلاق خلف المستوى،
+    ولو اكتمل التحوّل قبل شموع. fresh=True (بوابة الدخول): حدث — الإغلاق الأخير هو العبور
+    نفسه، والإغلاق السابق له لم يكن خلف مستوى التحوّل (بنفس المرجع).
     """
     if len(df) < lookback + 5:
         return False, False
@@ -187,6 +191,11 @@ def cisd_5m(df: pd.DataFrame, lookback: int = 15) -> Tuple[bool, bool]:
     bull = (r_low  < ref_low  * 0.9998) and (r_close > ref_high * 0.9990)
     # Bearish: مسح القمة + إغلاق تحت القاع
     bear = (r_high > ref_high * 1.0002) and (r_close < ref_low  * 1.0010)
+
+    if fresh:
+        p_close = float(df['Close'].iloc[-2])
+        bull = bull and p_close <= ref_high * 0.9990
+        bear = bear and p_close >= ref_low  * 1.0010
 
     return bool(bull), bool(bear)
 
@@ -220,8 +229,7 @@ def displacement_5m(df: pd.DataFrame, direction: str, atr: float) -> bool:
         return c < o and close_pos <= 0.30 and body_ratio >= 0.60
 
 
-def inversion_fvg_confirms_zone(df5m: pd.DataFrame, zone: HTFZone, direction: str,
-                                since_idx: Optional[int] = None) -> bool:
+def inversion_fvg_confirms_zone(df5m: pd.DataFrame, zone: HTFZone, direction: str) -> bool:
     """
     Inversion FVG داخل منطقة HTF — تأكيد قوي (مثل Breaker لكن على الفجوات):
 
@@ -232,16 +240,14 @@ def inversion_fvg_confirms_zone(df5m: pd.DataFrame, zone: HTFZone, direction: st
 
     الشرط الإضافي: الفجوة المنقلبة تتقاطع مع منطقة الـ HTF (Confluence).
 
-    since_idx (اختياري — بوابة الدخول): فهرس موضعي في df5m الأصلي؛ لو مُرِّر،
-    يُقبل الانقلاب فقط إذا وقع إغلاقه الكاسر عند هذا الفهرس أو بعده («بعد الوصول
-    للمنطقة»). الفجوة نفسها قد تكون أقدم. None = السلوك الأصلي (analyze لا يتغيّر).
+    حالة لا حدث: فجوة خام (بلا فلاتر) في آخر 40 شمعة وأي إغلاق لاحق خلفها في أي وقت
+    — يكفي أن يكون السعر خلف فجوة انقلبت قبل ساعات. يستخدمها analyze كمكافأة سكور
+    لحظة المسح فقط. بوابة الدخول لا تستخدمها: entry_gate.ifvg_after (حدث بعد الوصول).
     """
     window = df5m.tail(40)
     n = len(window)
     if n < 6:
         return False
-    offset = len(df5m) - n
-    since  = 0 if since_idx is None else max(0, int(since_idx) - offset)
 
     closes = window['Close'].values
     highs  = window['High'].values
@@ -255,7 +261,7 @@ def inversion_fvg_confirms_zone(df5m: pd.DataFrame, zone: HTFZone, direction: st
         if c2_h < c0_l:
             band_lo, band_hi = c2_h, c0_l
             # هل أغلق السعر لاحقاً فوق الفجوة؟ (انقلاب صعودي)
-            broke_up = any(closes[j] > band_hi for j in range(max(i + 1, since), n))
+            broke_up = any(closes[j] > band_hi for j in range(i + 1, n))
             if direction == 'call' and broke_up:
                 if band_lo <= zone.high and band_hi >= zone.low:
                     return True
@@ -264,7 +270,7 @@ def inversion_fvg_confirms_zone(df5m: pd.DataFrame, zone: HTFZone, direction: st
         elif c2_l > c0_h:
             band_lo, band_hi = c0_h, c2_l
             # هل أغلق السعر لاحقاً تحت الفجوة؟ (انقلاب هبوطي)
-            broke_dn = any(closes[j] < band_lo for j in range(max(i + 1, since), n))
+            broke_dn = any(closes[j] < band_lo for j in range(i + 1, n))
             if direction == 'put' and broke_dn:
                 if band_lo <= zone.high and band_hi >= zone.low:
                     return True

@@ -1,14 +1,23 @@
 -- ============================================================================
 -- analysis/shadow_compare.sql — مقارنة الظل بالحي على نفس الإشارات (قراءة فقط)
--- تُنفَّذ في Supabase SQL editor بعد أسبوعي قياس. عدّل :since لتاريخ نشر المرحلة ٢.
+-- تُنفَّذ في Supabase SQL editor بعد أسبوعي قياس.
 -- تنبيه: صفوف signals بحالات hit_t1/hit_t2/stopped مع exit_reason IS NULL قبل
 -- 2026-09-11 أحكام tracker قديم مضخّمة — استبعدها من أي تجميع حي.
 -- ============================================================================
+
+-- ─── حدّ القياس: ثابت واحد تقرؤه كل الاستعلامات — عدّله هنا فقط ─────────────
+-- = لحظة نشر إصلاح بوابة التأكيد (fix/gate-confirmation-events: 5d37e58 … 403f85a).
+-- كل مراقبة ظل سُجِّلت قبله قيست بآلية معطوبة (ifvg وcisd عدّا حالة قائمة قبل الوصول
+-- تأكيداً، ونوافذ التأكيد رأت شموع ما قبل/بعد الجلسة) — تُهمل ولا تُدمج بما بعده.
+-- المحرّر يفتح جلسة جديدة لكل تشغيل: حدّد سطر set مع الاستعلام الذي تنفّذه. بدونه يفشل
+-- الاستعلام بخطأ unrecognized configuration parameter "shadow.since" — لا نتائج مدموجة بصمت.
+set shadow.since = '2026-09-19 15:35:01-04:00';
 
 -- 0) نسب التصنيف عند التسجيل (كم إشارة حية لا تخضع للبوابة أصلاً)
 select state, count(*) as n, round(100.0 * count(*) / sum(count(*)) over (), 1) as pct,
        count(*) filter (where alt_zone_found) as alt_zone_found
 from public.shadow_watches
+where registered_at >= current_setting('shadow.since')::timestamptz
 group by state order by n desc;
 
 -- 1) جدول لكل إشارة: الحي مقابل الظل (المادة الخام للمقارنة)
@@ -22,7 +31,7 @@ select s.id, s.symbol, s.direction,
        w.r_planned, w.r_actual, w.duration_min as shadow_min, w.entry_eval_lag_sec, w.gap
 from public.signals s
 join public.shadow_watches w on w.signal_id = s.id
-where s.created_at >= '2026-09-14'   -- :since
+where w.registered_at >= current_setting('shadow.since')::timestamptz
 order by s.created_at;
 
 -- 2) الفئة المعاكسة (zone_conflict): خسائر حية تجنّبها الظل بمجرد عدم المراقبة
@@ -37,7 +46,8 @@ select count(*) as conflict_signals,
        round(avg(s.option_pnl_pct) filter (where w.alt_zone_found)::numeric, 1) as live_avg_pnl_when_alt_found
 from public.shadow_watches w
 join public.signals s on s.id = w.signal_id
-where w.state = 'zone_conflict';
+where w.state = 'zone_conflict'
+  and w.registered_at >= current_setting('shadow.since')::timestamptz;
 
 -- 3) الفئة الموافقة: أثر التأكيد (الحي مقابل الظل على نفس الإشارات)
 with a as (
@@ -46,6 +56,7 @@ with a as (
   from public.shadow_watches w
   join public.signals s on s.id = w.signal_id
   where w.state not in ('no_zone', 'zone_conflict')
+    and w.registered_at >= current_setting('shadow.since')::timestamptz
 )
 select
   count(*) as aligned_signals,
@@ -69,6 +80,7 @@ select confirm_type, count(*) as n, count(option_pnl_pct) as with_pnl,
        round(avg(bars_seen)::numeric, 1) as avg_bars_to_confirm
 from public.shadow_watches
 where state = 'closed'
+  and registered_at >= current_setting('shadow.since')::timestamptz
 group by confirm_type order by n desc;
 
 -- 5) ربح الظل حسب مصدر الهدف وأساس الستوب (يكشف fallback_2r والمنطقة العريضة)
@@ -78,6 +90,7 @@ select target1_source, stop_basis, count(*) as n,
        round(avg(risk_atr)::numeric, 2) as avg_risk_atr
 from public.shadow_watches
 where state = 'closed'
+  and registered_at >= current_setting('shadow.since')::timestamptz
 group by 1, 2 order by n desc;
 
 -- 6) الإلغاءات: كم timeout تبعه رجوع للمنطقة (مادة قرار الزيارة الثانية)
@@ -86,6 +99,7 @@ select cancel_reason, count(*) as n,
        round(avg(bars_seen)::numeric, 1) as avg_bars
 from public.shadow_watches
 where state = 'cancelled'
+  and registered_at >= current_setting('shadow.since')::timestamptz
 group by cancel_reason order by n desc;
 
 -- 7) جودة البيانات: تأخر التقييم، الفجوات، غياب سعر العقد
@@ -96,7 +110,8 @@ select count(*) as entered,
        count(*) filter (where entry_option_price is null) as no_entry_opt,
        count(*) filter (where state = 'closed' and option_pnl_pct is null) as closed_no_pnl
 from public.shadow_watches
-where entered_at is not null;
+where entered_at is not null
+  and registered_at >= current_setting('shadow.since')::timestamptz;
 
 -- 8) سجل شمعة بشمعة لمراقبة محدّدة (تدقيق يدوي مع الشارت)
 -- select bar_ts at time zone 'America/New_York' as bar_et, kind, state_before, state_after, checks

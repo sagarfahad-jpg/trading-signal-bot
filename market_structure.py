@@ -44,7 +44,8 @@ def _find_fvg(df: pd.DataFrame,
               mitigation_source: str = 'highlow',
               dynamic_threshold: bool = True,
               threshold_mult: float = 2.0,
-              require_close_confirmation: bool = True) -> List[Tuple[float, float, str]]:
+              require_close_confirmation: bool = True,
+              with_index: bool = False) -> List[Tuple[float, float, str]]:
     """
     فجوات القيمة العادلة (FVG) مع تتبّع الـ Mitigation (LuxAlgo SMC #7) +
     Dynamic Threshold + شرط الإغلاق (LuxAlgo SMC #9).
@@ -63,6 +64,8 @@ def _find_fvg(df: pd.DataFrame,
 
     Returns: List of (low, high, type) tuples where type is one of:
       'bullish', 'bearish', 'demand', 'supply'
+    with_index=True: (low, high, type, i) — i موضع الشمعة الثالثة (c2) في df
+      (بوابة الدخول تحتاج توقيت الفجوة؛ الافتراضي لا يتغيّر).
     """
     fvgs = []
     n = len(df)
@@ -105,7 +108,7 @@ def _find_fvg(df: pd.DataFrame,
                 check_src = lows[i + 1:] if mitigation_source == 'highlow' else closes[i + 1:]
                 if len(check_src) > 0 and check_src.min() < c0_h:
                     fvg_type = 'supply'
-            fvgs.append((c0_h, c2_l, fvg_type))
+            fvgs.append((c0_h, c2_l, fvg_type, i) if with_index else (c0_h, c2_l, fvg_type))
 
         elif c2_h < c0_l:
             # Bearish FVG candidate
@@ -119,7 +122,7 @@ def _find_fvg(df: pd.DataFrame,
                 check_src = highs[i + 1:] if mitigation_source == 'highlow' else closes[i + 1:]
                 if len(check_src) > 0 and check_src.max() > c0_l:
                     fvg_type = 'demand'
-            fvgs.append((c2_h, c0_l, fvg_type))
+            fvgs.append((c2_h, c0_l, fvg_type, i) if with_index else (c2_h, c0_l, fvg_type))
 
     return fvgs[-limit:]
 
