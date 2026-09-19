@@ -4,7 +4,8 @@ Entry Gate — بوابة الدخول بالتأكيد عند منطقة HTF (�
 منطق نقي بالكامل: DataFrame + حالة → قرار. لا شبكة، لا Supabase، لا Telegram.
 يستهلكه shadow_gate.py (وضع الظل)، ومستقبلاً price_monitor عند التحويل الحي.
 
-التدفّق (يُقيَّم على شموع 5m مُغلقة داخل الجلسة 09:30–16:00 ET فقط):
+التدفّق (يُقيَّم على شموع 5m مُغلقة داخل الجلسة 09:30–16:00 ET فقط، ونوافذ التأكيد
+الأربع ترى شموع الجلسة فقط — run_checks/session_view):
   armed   → أول شمعة يتداخل مداها مع منطقة HTF          → touched (شمعة ١ من ٦)
   touched → eod | break | تأكيد (rejection→cisd→ifvg→fvg) | timeout عند الشمعة ٦
   entered → T2 / Stop / T1 ثم Trailing (نفس قواعد price_monitor._check)
@@ -130,6 +131,31 @@ def candidate_positions(df: pd.DataFrame, since_ts=None, last_bar_ts=None) -> Li
             continue
         out.append(pos)
     return out
+
+
+def session_mask(index) -> np.ndarray:
+    """متّجه: True لكل شمعة تبدأ داخل [09:30, 16:00) ET — نفس is_session_bar."""
+    idx = pd.DatetimeIndex(index)
+    idx = idx.tz_localize(ET) if idx.tz is None else idx.tz_convert(ET)
+    m = idx.hour * 60 + idx.minute
+    lo = SESSION_OPEN_ET[0] * 60 + SESSION_OPEN_ET[1]
+    hi = SESSION_CLOSE_ET[0] * 60 + SESSION_CLOSE_ET[1]
+    return np.asarray((m >= lo) & (m < hi))
+
+
+def session_view(df: pd.DataFrame, pos: int,
+                 arrival_pos: int) -> Optional[Tuple[pd.DataFrame, int, int]]:
+    """
+    شموع الجلسة فقط حتى pos (IEX يضم ما قبل/بعد الجلسة) → (sdf, spos, sarr):
+    موضع الشمعة المُقيَّمة وشمعة الوصول داخل sdf. None لو pos نفسها خارج الجلسة.
+    """
+    mask = session_mask(df.index[:pos + 1])
+    if not len(mask) or not mask[-1]:
+        return None
+    sdf = df.iloc[:pos + 1][mask]
+    spos = len(sdf) - 1
+    sarr = min(int(mask[:max(0, int(arrival_pos))].sum()), spos)
+    return sdf, spos, sarr
 
 
 def floor_5m(ts) -> pd.Timestamp:
@@ -271,13 +297,22 @@ def fvg_after(df: pd.DataFrame, pos: int, arrival_pos: int,
 
 def run_checks(df: pd.DataFrame, pos: int, arrival_pos: int, zone: GateZone,
                direction: str, atr: float) -> dict:
-    """كل الأعلام تُحسب وتُسجَّل (displacement علم فقط لا يُدخِل)."""
+    """
+    كل الأعلام تُحسب وتُسجَّل (displacement علم فقط لا يُدخِل) على شموع الجلسة فقط:
+    شموع ما قبل/بعد الجلسة لا تدخل أي نافذة تأكيد (ذيول rejection السابقة، مرجع cisd،
+    فجوات ifvg/fvg) — قبل الافتتاح تمتد النافذة لآخر شموع جلسة اليوم السابق.
+    """
+    view = session_view(df, pos, arrival_pos)
+    if view is None:
+        return {'rejection': {'ok': False, 'outside_session': True}, 'cisd': False,
+                'ifvg': False, 'fvg': False, 'displacement': False}
+    sdf, spos, sarr = view
     return {
-        'rejection':    rejection(df, pos, zone, direction),
-        'cisd':         cisd_after(df, pos, direction),
-        'ifvg':         ifvg_after(df, pos, arrival_pos, zone, direction),
-        'fvg':          fvg_after(df, pos, arrival_pos, zone, direction),
-        'displacement': bool(displacement_5m(df.iloc[:pos + 1], direction, atr)),
+        'rejection':    rejection(sdf, spos, zone, direction),
+        'cisd':         cisd_after(sdf, spos, direction),
+        'ifvg':         ifvg_after(sdf, spos, sarr, zone, direction),
+        'fvg':          fvg_after(sdf, spos, sarr, zone, direction),
+        'displacement': bool(displacement_5m(sdf.iloc[:spos + 1], direction, atr)),
     }
 
 

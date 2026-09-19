@@ -251,6 +251,87 @@ def test_ifvg_event_after_arrival_enters():
     assert st["state"] == "entered" and decs[-1].reason == "ifvg" and decs[-1].bars_seen == 3
 
 
+# ── نوافذ التأكيد على شموع الجلسة فقط ──────────────────────────────────────
+
+def seg(start, rows):
+    return bars(rows, start=start)
+
+
+def premarket_day(prev_rows, pre_rows, sess_rows):
+    """جلسة اليوم السابق (من 14:00) + ما قبل الافتتاح (من 08:00) + جلسة اليوم (من 09:30)."""
+    return pd.concat([seg("2026-09-09 14:00", prev_rows),
+                      seg("2026-09-10 08:00", pre_rows),
+                      seg("2026-09-10 09:30", sess_rows)])
+
+
+def test_session_view_maps_positions_and_skips_extended_hours():
+    df = premarket_day(flat(24), flat(18), flat(3))          # 24 + 18 + 3
+    sdf, spos, sarr = eg.session_view(df, pos=44, arrival_pos=43)
+    assert len(sdf) == 27 and spos == 26 and sarr == 25
+    assert all(eg.is_session_bar(t) for t in sdf.index)
+    assert sdf.index[sarr] == df.index[43] and sdf.index[spos] == df.index[44]
+    assert eg.session_view(df, pos=30, arrival_pos=30) is None               # شمعة ما قبل الافتتاح
+
+
+def test_rejection_prev_wicks_ignore_premarket():
+    # ذيول جلسة الأمس 1.0 وذيول ما قبل الافتتاح 0.05؛ ذيل شمعة 09:30 = 0.7
+    zone = GateZone(low=99.2, high=99.5, direction="demand")
+    df = premarket_day(flat(24, o=100.0, h=100.3, l=99.0, c=100.1),
+                       flat(18, o=100.0, h=100.1, l=99.95, c=100.05),
+                       [[100.0, 100.1, 99.1, 99.8, 1000]])
+    pos = len(df) - 1
+    assert eg.rejection(df, pos, zone, "call")["ok"] is True                 # لو دخلت شموع ما قبل الافتتاح
+    ck = eg.run_checks(df, pos, pos, zone, "call", eg.atr_5m(df))
+    assert ck["rejection"]["ok"] is False and ck["rejection"]["prev_max_wick"] == 1.0
+    st, decs = run(df, armed("call", zone), [pos])
+    assert decs[-1].touched and decs[-1].action == "none"
+
+
+def test_ifvg_gap_made_of_premarket_bars_does_not_count():
+    # فجوة هابطة (99.5, 99.9) تكوّنت 08:50–09:00 قبل الافتتاح؛ عبور جديد 09:35 بعد الوصول 09:30
+    zone = GateZone(low=99.0, high=100.0, direction="demand")
+    pre = flat(10, o=100.5, h=100.6, l=100.4, c=100.5)                        # 08:00–08:45
+    pre += [[100.5, 100.6, 99.9, 100.0, 1000],                                # 08:50 c0
+            [100.0, 100.0, 99.3, 99.35, 1000],                                # 08:55 c1
+            [99.35, 99.5, 99.2, 99.4, 1000]]                                  # 09:00 c2
+    pre += flat(5, o=99.4, h=99.5, l=99.3, c=99.4)                            # 09:05–09:25
+    df = premarket_day(flat(24, o=99.6, h=99.8, l=99.4, c=99.6), pre,
+                       [[99.4, 99.6, 99.3, 99.5, 1000],                       # 09:30 الوصول
+                        [99.5, 100.2, 99.45, 100.1, 1000]])                   # 09:35 العبور
+    pos, arr = len(df) - 1, len(df) - 2
+    assert eg.ifvg_after(df, pos, arr, zone, "call") is True                  # لو دخلت شموع ما قبل الافتتاح
+    assert eg.run_checks(df, pos, arr, zone, "call", eg.atr_5m(df))["ifvg"] is False
+
+
+def test_fvg_window_before_0930_arrival_uses_prior_session_bars():
+    # FVG صاعدة (99.2, 99.5): c0=09:20 و c1=09:25 قبل الافتتاح، c2=09:30 (الوصول)
+    zone = GateZone(low=99.0, high=100.0, direction="demand")
+    pre = flat(16, o=99.0, h=99.2, l=98.9, c=99.0)                            # 08:00–09:15
+    pre += [[99.0, 99.2, 98.9, 99.0, 1000],                                   # 09:20 c0
+            [99.0, 99.8, 99.0, 99.75, 1000]]                                  # 09:25 c1
+    df = premarket_day(flat(24, o=100.2, h=100.4, l=100.0, c=100.2), pre,
+                       [[99.75, 99.9, 99.5, 99.8, 1000]])                     # 09:30 c2
+    pos = len(df) - 1
+    assert eg.fvg_after(df, pos, pos, zone, "call") is True                   # لو دخلت شموع ما قبل الافتتاح
+    ck = eg.run_checks(df, pos, pos, zone, "call", eg.atr_5m(df))
+    assert ck["fvg"] is False and ck["ifvg"] is False
+
+
+def test_cisd_reference_ignores_premarket_range():
+    # مرجع جلسة الأمس واسع (99–101)، ما قبل الافتتاح ضيّق (99.9–100.2): 09:30 تكسر القاع الضيّق
+    # و 09:35 تُغلق فوق القمة الضيّقة → cisd لو دخلت شموع ما قبل الافتتاح، لا cisd على الجلسة.
+    zone = GateZone(low=99.3, high=99.6, direction="demand")
+    df = premarket_day(flat(24, o=100.0, h=101.0, l=99.0, c=100.0),
+                       flat(18, o=100.0, h=100.2, l=99.9, c=100.1),
+                       [[100.0, 100.1, 99.5, 99.7, 1000],                     # 09:30 الوصول
+                        [99.7, 100.4, 99.65, 100.3, 1000]])                   # 09:35
+    pos, arr = len(df) - 1, len(df) - 2
+    assert eg.cisd_after(df, pos, "call") is True                             # لو دخلت شموع ما قبل الافتتاح
+    ck = eg.run_checks(df, pos, arr, zone, "call", eg.atr_5m(df))
+    assert ck["cisd"] is False
+    assert eg.first_confirmation(ck) is None
+
+
 def test_fvg_formed_after_arrival_confirms():
     # السياق بقمم 100.6 كي لا يتحقق cisd (الإغلاق لا يتجاوز القمة المرجعية)،
     # وقمة شمعة الوصول 99.9 كي لا تتكوّن فجوة هابطة تنقلب (ifvg) — نعزل مسار fvg.
