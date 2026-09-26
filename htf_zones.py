@@ -155,6 +155,53 @@ def nearest_zone(
     return max(nearby, key=lambda z: z.strength)
 
 
+# ─── منطقة الدخول لبوابة الظل: الأضيق يفوز، والأوسع يبقى سياقاً ─────────────────
+
+EDGE_FRACTION = 0.5   # daily_edge: النصف البعيد من المنطقة اليومية (mean threshold) — قرار المالك 2026-09-26
+_TF_RANK = {'1h': 1, '4h': 2, 'daily': 3}
+
+
+def select_entry_zone(zones: List[HTFZone], price: float, direction: str,
+                      context: HTFZone) -> dict:
+    """
+    منطقة الدخول لبوابة الظل. context = المنطقة الموافقة النشطة (price_in_zone/nearest_zone)،
+    تبقى سياقاً ولا تدخل أي شرط.
+      1) أضيق منطقة موافقة الاتجاه من فريم أدنى من السياق تحتوي السعر، وتتقاطع مع السياق،
+         وأضيق منه؛ التعادل في العرض للفريم الأعلى.                  → source = htf_4h | htf_1h
+      2) لا شيء والسياق 4h/1h → السياق نفسه منطقة الدخول.           → source = htf_4h | htf_1h
+      3) لا شيء والسياق يومي → النصف البعيد (خلف mean threshold في اتجاه دخول السعر إليها):
+         demand → [low, low + ½W]، supply → [high − ½W, high].      → source = daily_edge
+         لا الشريط القريب: السعر داخل المنطقة لحظة الإشارة في 96% من الحالات، فيقع الشريط
+         القريب خلفه غالباً ويقلب معنى rejection وbreak.
+    يُرجع {'low', 'high', 'tf', 'type', 'source'}.
+    """
+    exp_dir   = 'demand' if direction == 'call' else 'supply'
+    ctx_rank  = _TF_RANK.get(context.timeframe, 0)
+    ctx_width = float(context.high) - float(context.low)
+    cands = [
+        z for z in zones
+        if z.direction == exp_dir
+        and z.low <= price <= z.high
+        and _TF_RANK.get(z.timeframe, 99) < ctx_rank
+        and (z.high - z.low) < ctx_width
+        and z.low <= context.high and z.high >= context.low
+    ]
+    if cands:
+        z = min(cands, key=lambda z: (z.high - z.low, -_TF_RANK[z.timeframe]))
+        return {'low': float(z.low), 'high': float(z.high), 'tf': z.timeframe,
+                'type': z.zone_type, 'source': f'htf_{z.timeframe}'}
+    if context.timeframe != 'daily':
+        return {'low': float(context.low), 'high': float(context.high), 'tf': context.timeframe,
+                'type': context.zone_type, 'source': f'htf_{context.timeframe}'}
+    half = EDGE_FRACTION * ctx_width
+    if direction == 'call':
+        low, high = float(context.low), float(context.low) + half
+    else:
+        low, high = float(context.high) - half, float(context.high)
+    return {'low': round(low, 4), 'high': round(high, 4), 'tf': 'daily',
+            'type': context.zone_type, 'source': 'daily_edge'}
+
+
 # ─── LTF Confirmations (5m) ───────────────────────────────────────────────────
 
 def cisd_5m(df: pd.DataFrame, lookback: int = 15, fresh: bool = False) -> Tuple[bool, bool]:
