@@ -57,6 +57,11 @@ class SignalResult:
     alt_zone_high: float = 0.0
     alt_zone_tf:   str   = ""
     alt_zone_type: str   = ""
+    entry_zone_low:    float = 0.0   # منطقة دخول البوابة (htf_zones.select_entry_zone: الأضيق يفوز)
+    entry_zone_high:   float = 0.0   # المنطقة النشطة أعلاه تبقى سياقاً
+    entry_zone_tf:     str   = ""
+    entry_zone_type:   str   = ""    # 'OB' | 'FVG' | 'INV_FVG'
+    entry_zone_source: str   = ""    # 'htf_4h' | 'htf_1h' | 'daily_edge'
     atr:           float = 0.0   # ATR(14) على 5m لحظة الإشارة
     # ── SMT ───────────────────────────────────────────────────────────────────
     smt_divergence: bool = False  # SMT divergence detected (^NDX vs ^GSPC)
@@ -1060,7 +1065,7 @@ def analyze(
         # ── HTF Zone Analysis ─────────────────────────────────────────────────
         from htf_zones import (get_htf_analysis, price_in_zone, nearest_zone,
                                 cisd_5m, displacement_5m, fvg_confirms_zone,
-                                inversion_fvg_confirms_zone)
+                                inversion_fvg_confirms_zone, select_entry_zone)
 
         htf          = get_htf_analysis(symbol, df1h, df4h, df1d)
         _direction_p = 'call' if bs >= ps else 'put'  # الاتجاه المؤقت للبحث عن المنطقة
@@ -1316,9 +1321,11 @@ def analyze(
         # ── حدود منطقة HTF + منطقة موافقة بديلة (لبوابة الدخول / الظل) ─────────
         # price_in_zone يعيد أقوى منطقة تحتوي السعر بغض النظر عن اتجاهها؛ عند التعارض
         # نسجّل (للتحليل فقط، بلا إنقاذ) هل وُجدت منطقة موافقة أضعف تحتوي السعر.
+        # منطقة الموافقة → منطقة دخول البوابة: الأضيق يفوز، والنشطة تبقى سياقاً (قرار 2026-09-26).
         zone_low = zone_high = 0.0
         alt_low = alt_high = 0.0
         alt_tf = alt_type = ""
+        entry_zone: dict = {}
         if active_zone:
             zone_low, zone_high = float(active_zone.low), float(active_zone.high)
             _exp_dir = 'demand' if direction == 'call' else 'supply'
@@ -1327,6 +1334,8 @@ def analyze(
                 if _alt:
                     alt_low, alt_high = float(_alt.low), float(_alt.high)
                     alt_tf, alt_type  = _alt.timeframe, _alt.zone_type.upper()
+            else:
+                entry_zone = select_entry_zone(htf['zones'], price, direction, active_zone)
 
         is_scalp   = (atr / price) < SCALP_ATR_PCT
         expiry, strike, option_price, delta, iv, theta = _get_contract(
@@ -1378,6 +1387,11 @@ def analyze(
             htf_zone_low=round(zone_low, 4), htf_zone_high=round(zone_high, 4),
             alt_zone_low=round(alt_low, 4), alt_zone_high=round(alt_high, 4),
             alt_zone_tf=alt_tf, alt_zone_type=alt_type,
+            entry_zone_low=round(float(entry_zone.get('low', 0.0)), 4),
+            entry_zone_high=round(float(entry_zone.get('high', 0.0)), 4),
+            entry_zone_tf=entry_zone.get('tf', ''),
+            entry_zone_type=(entry_zone.get('type') or '').upper(),
+            entry_zone_source=entry_zone.get('source', ''),
             atr=round(float(atr), 4),
             smt_divergence=bool(_smt_dir), smt_direction=_smt_dir,
             structure_event=_ms_event or "",

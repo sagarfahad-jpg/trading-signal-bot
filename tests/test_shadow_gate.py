@@ -114,6 +114,46 @@ def test_register_respects_kill_switch(env):
     assert sg.register(signal(), 1) is None and env.watches == {}
 
 
+# ── منطقة الدخول (الأضيق يفوز) مقابل السياق ──────────────────────────────────
+
+ENTRY_1H = dict(entry_zone_low=99.2, entry_zone_high=99.5, entry_zone_tf="1h",
+                entry_zone_type="FVG", entry_zone_source="htf_1h")
+
+
+def test_register_armed_watches_entry_zone_and_records_context(env):
+    wid = sg.register(signal(htf_zone_low=97.0, htf_zone_high=103.0, **ENTRY_1H), 104)
+    w = env.watches[wid]
+    assert w["state"] == "armed"
+    assert (w["zone_low"], w["zone_high"], w["zone_tf"], w["zone_type"]) == (99.2, 99.5, "1h", "FVG")
+    assert w["zone_source"] == "htf_1h" and w["zone_width_atr"] == 0.6
+    assert (w["context_zone_low"], w["context_zone_high"], w["context_zone_tf"],
+            w["context_zone_type"]) == (97.0, 103.0, "daily", "OB")
+
+
+def test_register_conflict_and_no_zone_keep_context_semantics(env):
+    b = sg.register(signal(htf_direction="supply", htf_zone_low=97.0, htf_zone_high=103.0, **ENTRY_1H), 105)
+    w = env.watches[b]
+    assert w["state"] == "zone_conflict" and w["zone_source"] is None
+    assert (w["zone_low"], w["zone_high"]) == (w["context_zone_low"], w["context_zone_high"]) == (97.0, 103.0)
+    a = sg.register(signal(htf_zone_tf="", htf_zone_type="", htf_direction="", htf_zone_low=0, htf_zone_high=0), 106)
+    assert env.watches[a]["zone_source"] is None and env.watches[a]["context_zone_low"] is None
+
+
+def test_register_armed_without_entry_zone_falls_back_to_context(env):
+    w = env.watches[sg.register(signal(), 107)]                 # إشارة بلا حقول entry_zone_*
+    assert w["zone_source"] == "context" and (w["zone_low"], w["zone_high"]) == (99.2, 99.5)
+
+
+def test_gate_evaluates_the_entry_zone_not_the_context(env):
+    # ذيل REJ (98.8) يكسر حدّ منطقة الدخول 99.2 لا حدّ السياق اليومي 95 → rejection فقط لو قُيِّمت منطقة الدخول
+    wid = sg.register(signal(htf_zone_low=95.0, htf_zone_high=105.0, **ENTRY_1H), 108)
+    env.watches[wid]["registered_at"] = "2026-09-10T14:02:00Z"
+    env.frames["SPY"] = bars(flat(12) + [REJ])
+    sg._tick(et("2026-09-10 10:05:30"))
+    w = env.watches[wid]
+    assert w["state"] == "entered" and w["confirm_type"] == "rejection" and w["stop_basis"] == "candle"
+
+
 # ── armed → touched → entered ───────────────────────────────────────────────
 
 def _armed_watch(env, registered="2026-09-10T14:02:00Z", **over):

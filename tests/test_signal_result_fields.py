@@ -16,6 +16,8 @@ def test_new_fields_default_to_zero():
     s = _sig()
     assert (s.htf_zone_low, s.htf_zone_high, s.atr) == (0.0, 0.0, 0.0)
     assert (s.alt_zone_low, s.alt_zone_high, s.alt_zone_tf, s.alt_zone_type) == (0.0, 0.0, "", "")
+    assert (s.entry_zone_low, s.entry_zone_high, s.entry_zone_tf, s.entry_zone_type,
+            s.entry_zone_source) == (0.0, 0.0, "", "", "")
 
 
 def test_save_signal_payload_excludes_new_fields(monkeypatch):
@@ -36,11 +38,15 @@ def test_save_signal_payload_excludes_new_fields(monkeypatch):
     monkeypatch.setattr(db.requests, "post", fake_post)
     s = _sig(htf_zone_tf="daily", htf_zone_type="OB", htf_direction="demand",
              htf_zone_low=99.0, htf_zone_high=100.2, alt_zone_low=98.0, alt_zone_high=99.5,
-             alt_zone_tf="4h", alt_zone_type="FVG", atr=0.42)
+             alt_zone_tf="4h", alt_zone_type="FVG", atr=0.42,
+             entry_zone_low=99.6, entry_zone_high=99.9, entry_zone_tf="1h",
+             entry_zone_type="FVG", entry_zone_source="htf_1h")
     assert db.save_signal(s) == 1
     for k in ("htf_zone_low", "htf_zone_high", "alt_zone_low", "alt_zone_high",
-              "alt_zone_tf", "alt_zone_type", "atr"):
+              "alt_zone_tf", "alt_zone_type", "atr", "entry_zone_low", "entry_zone_high",
+              "entry_zone_tf", "entry_zone_type", "entry_zone_source"):
         assert k not in captured, k
+    assert not [k for k in captured if k.startswith(("entry_zone", "context_zone", "zone_source"))]
     assert captured["htf_zone_tf"] == "daily" and captured["status"] == "open"
 
 
