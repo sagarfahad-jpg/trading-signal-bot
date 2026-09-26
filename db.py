@@ -86,8 +86,8 @@ def save_signal(sig: "SignalResult") -> Optional[int]:
         "htf_direction": sig.htf_direction,
         "cisd":           sig.cisd,
         "displacement":   sig.displacement,
-        "smt_divergence": sig.smt_divergence,
-        "smt_direction":  sig.smt_direction,
+        "smt_divergence": None,   # SMT أُزيل 2026-09-26: العمودان للتاريخ فقط — NULL = لم يُحسب
+        "smt_direction":  None,   # (لا '' / False التي تعني «حُسب ولا تباعد»)
         "max_pain":       getattr(sig, "max_pain", 0) or None,
         "call_wall":      getattr(sig, "call_wall", 0) or None,
         "put_wall":       getattr(sig, "put_wall", 0) or None,

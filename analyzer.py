@@ -63,9 +63,6 @@ class SignalResult:
     entry_zone_type:   str   = ""    # 'OB' | 'FVG' | 'INV_FVG'
     entry_zone_source: str   = ""    # 'htf_4h' | 'htf_1h' | 'daily_edge'
     atr:           float = 0.0   # ATR(14) على 5m لحظة الإشارة
-    # ── SMT ───────────────────────────────────────────────────────────────────
-    smt_divergence: bool = False  # SMT divergence detected (^NDX vs ^GSPC)
-    smt_direction:  str  = ""     # 'call' | 'put' | ''
     # ── Market Structure Events (BOS / CHoCH / MSS) ──────────────────────────
     structure_event: str = ""     # 'BOS' | 'CHoCH' | 'MSS' | ''
     structure_bias:  str = ""     # 'bullish' | 'bearish' | ''
@@ -387,9 +384,8 @@ def _get_contract(symbol: str, direction: str, price: float, is_scalp: bool = Fa
         return today_str.replace('-', ''), float(round(price)), 0.0, 0.0, 0.0, 0.0
 
 
-# ─── SMT (Smart Money Technique) ─────────────────────────────────────────────
+# ─── تعديل السكور بأداء نوع الدخول التاريخي ──────────────────────────────────
 
-_smt_cache: dict  = {"ts": 0.0, "direction": ""}
 _perf_cache: dict = {"ts": 0.0, "adj": {}}
 
 
@@ -437,61 +433,6 @@ def _get_perf_adj(entry_type: str) -> float:
         pass
 
     return float(_perf_cache["adj"].get(entry_type, 0.0))
-
-
-def _compute_smt(df_nas: pd.DataFrame, df_spx: pd.DataFrame) -> str:
-    """
-    Compares the last 2 pivot highs/lows on 1H for NAS100 (^NDX) vs SPX500 (^GSPC).
-    Bullish SMT : one makes a new lower low while the other does not  → 'call'
-    Bearish SMT : one makes a new higher high while the other does not → 'put'
-    Minimum divergence: 0.3%.
-    """
-    MIN_PCT = 0.003
-    LB      = 5
-
-    nas_highs, nas_lows = _pivot_levels(df_nas, LB)
-    spx_highs, spx_lows = _pivot_levels(df_spx, LB)
-
-    # Bullish SMT — new-low divergence
-    if len(nas_lows) >= 2 and len(spx_lows) >= 2:
-        n1, n0 = nas_lows[-1], nas_lows[-2]
-        s1, s0 = spx_lows[-1], spx_lows[-2]
-        if n0 > 0 and s0 > 0 and ((n1 < n0) != (s1 < s0)):
-            move = max(abs(n1 - n0) / n0, abs(s1 - s0) / s0)
-            if move >= MIN_PCT:
-                return 'call'
-
-    # Bearish SMT — new-high divergence
-    if len(nas_highs) >= 2 and len(spx_highs) >= 2:
-        n1, n0 = nas_highs[-1], nas_highs[-2]
-        s1, s0 = spx_highs[-1], spx_highs[-2]
-        if n0 > 0 and s0 > 0 and ((n1 > n0) != (s1 > s0)):
-            move = max(abs(n1 - n0) / n0, abs(s1 - s0) / s0)
-            if move >= MIN_PCT:
-                return 'put'
-
-    return ''
-
-
-def _get_smt_direction() -> str:
-    """Returns 'call', 'put', or '' — result cached for 15 minutes."""
-    import time as _t
-    now = _t.time()
-    if now - float(_smt_cache["ts"]) < 900:
-        return str(_smt_cache["direction"])
-
-    result = ""
-    try:
-        nas = yf.Ticker("^NDX").history(period="14d", interval="1h")
-        spx = yf.Ticker("^GSPC").history(period="14d", interval="1h")
-        if not nas.empty and not spx.empty and len(nas) >= 15 and len(spx) >= 15:
-            result = _compute_smt(nas, spx)
-    except Exception:
-        pass
-
-    _smt_cache["ts"]        = now
-    _smt_cache["direction"] = result
-    return result
 
 
 # ─── Quick scan (للـ Dashboard فقط — بدون options chain أو MTF) ───────────────
@@ -1119,15 +1060,7 @@ def analyze(
             if _direction_p == 'call' and tf_bias == 'bullish':   bs += 0.3
             elif _direction_p == 'put' and tf_bias == 'bearish':  ps += 0.3
 
-        # ── SMT Divergence (NAS100 vs SPX500 — 1H) ───────────────────────────
-        _smt_dir = _get_smt_direction()
-        if _smt_dir:
-            if _smt_dir == _direction_p:    # يؤكد الاتجاه
-                if _direction_p == 'call':  bs += 2.0
-                else:                       ps += 2.0
-            else:                           # يعارض الاتجاه
-                if _direction_p == 'call':  bs -= 2.0
-                else:                       ps -= 2.0
+        # (SMT ‏±2.0 أُزيل 2026-09-26 — معطوب بنيوياً؛ انظر STRATEGY.md §1️⃣2️⃣)
 
         # ── فلتر VIX ─────────────────────────────────────────────────────────
         vix = vix_value if vix_value is not None else 20.0
@@ -1393,7 +1326,6 @@ def analyze(
             entry_zone_type=(entry_zone.get('type') or '').upper(),
             entry_zone_source=entry_zone.get('source', ''),
             atr=round(float(atr), 4),
-            smt_divergence=bool(_smt_dir), smt_direction=_smt_dir,
             structure_event=_ms_event or "",
             structure_bias=_ms_bias or "",
             event_bars_ago=int(ms.get('event_bars_ago') or 0),

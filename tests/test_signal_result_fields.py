@@ -48,6 +48,7 @@ def test_save_signal_payload_excludes_new_fields(monkeypatch):
         assert k not in captured, k
     assert not [k for k in captured if k.startswith(("entry_zone", "context_zone", "zone_source"))]
     assert captured["htf_zone_tf"] == "daily" and captured["status"] == "open"
+    assert captured["smt_divergence"] is None and captured["smt_direction"] is None   # SMT أُزيل: NULL لا ''/False
 
 
 def test_format_message_unaffected():
@@ -55,3 +56,11 @@ def test_format_message_unaffected():
     msg = format_message(_sig(htf_zone_tf="daily", htf_zone_type="OB", htf_direction="demand",
                               htf_zone_low=99.0, htf_zone_high=100.2, atr=0.42))
     assert "SPY" in msg and "HTF Zone" in msg and "99.0" not in msg.split("HTF Zone")[1].split("\n")[0]
+    assert "SMT" not in msg
+
+
+def test_smt_removed_from_signal_and_analyzer():
+    import analyzer
+    s = _sig()
+    assert not hasattr(s, "smt_divergence") and not hasattr(s, "smt_direction")
+    assert not hasattr(analyzer, "_get_smt_direction") and not hasattr(analyzer, "_compute_smt")
