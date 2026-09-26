@@ -6,26 +6,30 @@
 -- ============================================================================
 
 -- ─── حدّ القياس: ثابت واحد تقرؤه كل الاستعلامات — عدّله هنا فقط ─────────────
--- = لحظة نشر إصلاح بوابة التأكيد (fix/gate-confirmation-events: 5d37e58 … 403f85a).
--- كل مراقبة ظل سُجِّلت قبله قيست بآلية معطوبة (ifvg وcisd عدّا حالة قائمة قبل الوصول
--- تأكيداً، ونوافذ التأكيد رأت شموع ما قبل/بعد الجلسة) — تُهمل ولا تُدمج بما بعده.
+-- = أول 09:30 ET بعد نشر fix/gate-zone-fvg-smt كاملاً (fvg حدث + منطقة الدخول «الأضيق
+-- يفوز» + حذف SMT) — يُحدَّد مع المالك بعد تأكيد النشر. القيمة أدناه placeholder عمداً:
+-- ليست تاريخاً، فيفشل كل استعلام بخطأ invalid input syntax for type timestamp حتى تُضبط.
+-- كل مراقبة قبل هذا الحد تُهمل ولا تُدمج بما بعده: حتى 2026-09-19 15:35 ifvg/cisd عدّا
+-- حالة قائمة تأكيداً؛ ومن 09-19 إلى النشر fvg كان يؤهّل فجوة قديمة بتوسّع النافذة، والبوابة
+-- تراقب المنطقة اليومية كاملة (وصول فوري، rejection شبه مستحيل)، وSMT ‏±2.0 كان يفلتر الإشارات.
 -- المحرّر يفتح جلسة جديدة لكل تشغيل: حدّد سطر set مع الاستعلام الذي تنفّذه. بدونه يفشل
 -- الاستعلام بخطأ unrecognized configuration parameter "shadow.since" — لا نتائج مدموجة بصمت.
-set shadow.since = '2026-09-19 15:35:01-04:00';
+set shadow.since = 'YYYY-MM-DD 09:30:00-04:00';   -- ⚠️ placeholder: أول 09:30 ET بعد النشر
 
--- 0) نسب التصنيف عند التسجيل (كم إشارة حية لا تخضع للبوابة أصلاً)
-select state, count(*) as n, round(100.0 * count(*) / sum(count(*)) over (), 1) as pct,
+-- 0) نسب التصنيف عند التسجيل (كم إشارة حية لا تخضع للبوابة أصلاً) ومصدر منطقة الدخول
+select state, zone_source, count(*) as n, round(100.0 * count(*) / sum(count(*)) over (), 1) as pct,
        count(*) filter (where alt_zone_found) as alt_zone_found
 from public.shadow_watches
 where registered_at >= current_setting('shadow.since')::timestamptz
-group by state order by n desc;
+group by state, zone_source order by n desc;
 
 -- 1) جدول لكل إشارة: الحي مقابل الظل (المادة الخام للمقارنة)
 select s.id, s.symbol, s.direction,
        (s.created_at at time zone 'America/New_York') as created_et,
        s.status as live_status, s.exit_reason as live_exit, s.option_pnl_pct as live_pnl,
        s.r_multiple as live_r, s.duration_min as live_min,
-       w.state as shadow_state, w.cancel_reason, w.bars_seen, w.confirm_type, w.confirm_close_loc,
+       w.state as shadow_state, w.zone_source, w.zone_tf, w.zone_width_atr, w.context_zone_tf,
+       w.cancel_reason, w.bars_seen, w.confirm_type, w.confirm_close_loc,
        w.stop_basis, w.target1_source, w.risk_atr, w.rr,
        w.status as shadow_status, w.exit_reason as shadow_exit, w.option_pnl_pct as shadow_pnl,
        w.r_planned, w.r_actual, w.duration_min as shadow_min, w.entry_eval_lag_sec, w.gap
@@ -83,15 +87,15 @@ where state = 'closed'
   and registered_at >= current_setting('shadow.since')::timestamptz
 group by confirm_type order by n desc;
 
--- 5) ربح الظل حسب مصدر الهدف وأساس الستوب (يكشف fallback_2r والمنطقة العريضة)
-select target1_source, stop_basis, count(*) as n,
+-- 5) ربح الظل حسب مصدر منطقة الدخول ومصدر الهدف وأساس الستوب (يكشف fallback_2r والمنطقة العريضة)
+select zone_source, target1_source, stop_basis, count(*) as n,
        round(avg(option_pnl_pct)::numeric, 1) as avg_pnl,
        round(100.0 * count(*) filter (where status in ('hit_t1','hit_t2')) / count(*), 0) as stock_wr,
        round(avg(risk_atr)::numeric, 2) as avg_risk_atr
 from public.shadow_watches
 where state = 'closed'
   and registered_at >= current_setting('shadow.since')::timestamptz
-group by 1, 2 order by n desc;
+group by 1, 2, 3 order by n desc;
 
 -- 6) الإلغاءات: كم timeout تبعه رجوع للمنطقة (مادة قرار الزيارة الثانية)
 select cancel_reason, count(*) as n,
@@ -116,3 +120,19 @@ where entered_at is not null
 -- 8) سجل شمعة بشمعة لمراقبة محدّدة (تدقيق يدوي مع الشارت)
 -- select bar_ts at time zone 'America/New_York' as bar_et, kind, state_before, state_after, checks
 -- from public.shadow_events where watch_id = :watch_id order by bar_ts, id;
+
+-- 9) مرحلة المنطقة حسب مصدر منطقة الدخول (الفئة الموافقة فقط): الوصول، المرور، الإلغاء، العرض
+--    (المتوقع من محاكاة 3 أشهر: htf_1h/htf_4h ‏~73% من armed، daily_edge ‏~26%، الوصول ~80%)
+select zone_source, count(*) as armed,
+       count(*) filter (where arrival_bar_ts is not null) as reached,
+       count(*) filter (where entered_at is not null) as entered,
+       round(100.0 * count(*) filter (where entered_at is not null)
+             / nullif(count(*) filter (where arrival_bar_ts is not null), 0), 1) as pass_pct,
+       count(*) filter (where cancel_reason = 'break') as brk,
+       count(*) filter (where cancel_reason = 'timeout') as timeout,
+       count(*) filter (where cancel_reason = 'eod') as eod,
+       round(avg(zone_width_atr)::numeric, 2) as avg_zone_width_atr
+from public.shadow_watches
+where state not in ('no_zone', 'zone_conflict')
+  and registered_at >= current_setting('shadow.since')::timestamptz
+group by zone_source order by armed desc;
