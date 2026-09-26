@@ -42,6 +42,7 @@ SESSION_OPEN_ET    = (9, 30)
 SESSION_CLOSE_ET   = (16, 0)
 REJECTION_LOOKBACK = 5          # أطول ذيل مماثل في آخر ٥ شموع
 IFVG_LOOKBACK      = 40         # نافذة البحث عن الفجوة (نفس inversion_fvg_confirms_zone)
+FVG_SIZE_LOOKBACK  = IFVG_LOOKBACK  # نافذة عتبة الحجم لـ fvg: ثابتة كـ ifvg، لا تكبر مع الانتظار
 MIN_T1_R           = 1.0        # الهدف الأول يبعد ≥ 1R
 MIN_T1_ATR         = 0.5        # و ≥ 0.5×ATR (تجاهل المستويات المجهرية)
 MAX_T1_R           = 4.0        # نفس سقف MAX_RR في analyzer
@@ -287,16 +288,21 @@ def ifvg_after(df: pd.DataFrame, pos: int, arrival_pos: int,
 def fvg_after(df: pd.DataFrame, pos: int, arrival_pos: int,
               zone: GateZone, direction: str) -> bool:
     """
-    FVG على 5m تكوّنت بعد الوصول (شمعتها الثالثة ≥ شمعة الوصول) وتتقاطع مع المنطقة
-    ولم تُملأ بعد. نافذة الحساب تبدأ شمعتين قبل الوصول (لتكوين النمط الثلاثي).
+    FVG كحدث على الشمعة المُقيَّمة: الفجوة تُعدّ فقط على الشمعة التي تُكمِلها (شمعتها
+    الثالثة = الشمعة المُقيَّمة، عند الوصول أو بعده) وتتقاطع مع المنطقة.
+    عتبة الحجم (dynamic threshold في _find_fvg) تُحسب على آخر FVG_SIZE_LOOKBACK شمعة
+    تنتهي بالشمعة المُقيَّمة — نافذة ثابتة كـ ifvg. كانت تُحسب على [الوصول−2 … الشمعة]
+    فتكبر مع كل شمعة انتظار (3→8) وتهبط العتبة، فتتأهّل فجوة فشلت لحظة اكتمالها بلا حدث
+    جديد (إعادة تشغيل IEX 2026-09-26: #88 و#98 دخلا هكذا)؛ وعند الشمعة ١ كانت النافذة
+    ثلاث شموع تضم الشمعة الوسطى نفسها، فتشترط جسماً ≥ ضعفي مجموع جسمَي جارتيها.
     """
-    window = df.iloc[max(0, arrival_pos - 2):pos + 1]
-    if len(window) < 3:
+    if pos < max(int(arrival_pos), 2):
         return False
-    for lo, hi, t in _find_fvg(window, limit=10):
-        if direction == 'call' and t == 'bullish' and lo <= zone.high and hi >= zone.low:
-            return True
-        if direction == 'put' and t == 'bearish' and lo <= zone.high and hi >= zone.low:
+    w = df.iloc[max(0, pos + 1 - FVG_SIZE_LOOKBACK):pos + 1]
+    want = 'bullish' if direction == 'call' else 'bearish'
+    last = len(w) - 1
+    for lo, hi, t, i in _find_fvg(w, limit=len(w), with_index=True):
+        if i == last and t == want and lo <= zone.high and hi >= zone.low:
             return True
     return False
 

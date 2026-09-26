@@ -31,13 +31,6 @@ def format_message(s: SignalResult) -> str:
         if htf_conflicts:
             htf_line += f"⚠️ تحذير: HTF يعارض الاتجاه — تداول بحذر\n"
 
-    # ── SMT ───────────────────────────────────────────────────────────────────
-    smt_line = ""
-    if s.smt_divergence:
-        smt_dir_ar = "كول 🟢" if s.smt_direction == 'call' else "بوت 🔴"
-        smt_emoji  = "✅ يؤكد" if s.smt_direction == s.direction else "⚠️ يعارض"
-        smt_line   = f"📡 SMT (NAS100/SPX500): {smt_dir_ar} — {smt_emoji}\n"
-
     # ── Options Flow (مستويات المؤسسات) ───────────────────────────────────────
     flow_line = ""
     mp = getattr(s, "max_pain", 0)
@@ -152,7 +145,6 @@ def format_message(s: SignalResult) -> str:
         f"⏰ صلاحية العقد: {expiry_type}\n"
         f"{regime_line}"
         f"{htf_line}"
-        f"{smt_line}"
         f"{flow_line}"
         f"\n"
         f"⚙️ خطة التنفيذ:\n"

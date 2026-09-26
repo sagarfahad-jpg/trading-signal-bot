@@ -146,7 +146,8 @@ def register(signal, signal_id: Optional[int]) -> Optional[int]:
     يسجّل مراقبة ظل لإشارة حية حُفظت للتو. التصنيف:
       no_zone       لا منطقة HTF مع الإشارة
       zone_conflict المنطقة النشطة تعاكس الاتجاه النهائي (يُسجَّل هل وُجدت بديلة موافقة)
-      armed         منطقة موافقة → ننتظر أول شمعة 5m مغلقة تتداخل معها
+      armed         منطقة موافقة → ننتظر أول شمعة 5m مغلقة تتداخل مع منطقة الدخول
+                    (signal.entry_zone_*: الأضيق يفوز)؛ المنطقة النشطة تُسجَّل في context_zone_*
     """
     if not db.is_configured() or not _enabled():
         return None
@@ -165,18 +166,33 @@ def register(signal, signal_id: Optional[int]) -> Optional[int]:
             state = "armed"
         has_zone = state != "no_zone"
         alt_found = bool(float(signal.alt_zone_high or 0) > 0)
+        # armed تراقب منطقة الدخول (الأضيق يفوز)؛ المنطقة النشطة تُسجَّل سياقاً لا يدخل أي شرط.
+        # armed بلا منطقة دخول (لا يحدث مع المحلّل الحالي) → السياق نفسه موسوماً 'context'.
+        e_low  = float(getattr(signal, "entry_zone_low", 0) or 0)
+        e_high = float(getattr(signal, "entry_zone_high", 0) or 0)
+        use_entry = state == "armed" and e_high > e_low > 0
+        u_low, u_high = (e_low, e_high) if use_entry else (z_low, z_high)
+        u_tf   = (getattr(signal, "entry_zone_tf", "") or "") if use_entry else zone_tf
+        u_type = (getattr(signal, "entry_zone_type", "") or "") if use_entry else (signal.htf_zone_type or "")
+        source = ((getattr(signal, "entry_zone_source", "") or "context") if use_entry
+                  else ("context" if state == "armed" else None))
         payload = {
             "signal_id":      signal_id,
             "symbol":         signal.symbol,
             "direction":      direction,
             "visit_no":       1,
             "state":          state,
-            "zone_low":       z_low if has_zone else None,
-            "zone_high":      z_high if has_zone else None,
-            "zone_tf":        zone_tf or None,
-            "zone_type":      (signal.htf_zone_type or None),
+            "zone_low":       u_low if has_zone else None,
+            "zone_high":      u_high if has_zone else None,
+            "zone_tf":        u_tf or None,
+            "zone_type":      u_type or None,
             "zone_direction": zone_dir or None,
-            "zone_width_atr": round((z_high - z_low) / atr, 3) if has_zone and atr > 0 else None,
+            "zone_width_atr": round((u_high - u_low) / atr, 3) if has_zone and atr > 0 else None,
+            "zone_source":    source,
+            "context_zone_low":  z_low if has_zone else None,
+            "context_zone_high": z_high if has_zone else None,
+            "context_zone_tf":   zone_tf or None,
+            "context_zone_type": (signal.htf_zone_type or None),
             "alt_zone_found": alt_found,
             "alt_zone_low":   float(signal.alt_zone_low) if alt_found else None,
             "alt_zone_high":  float(signal.alt_zone_high) if alt_found else None,
@@ -193,10 +209,13 @@ def register(signal, signal_id: Optional[int]) -> Optional[int]:
         wid = db.shadow_insert_watch(payload)
         if wid:
             _event(wid, "register", after=state,
-                   checks={"zone_tf": zone_tf, "zone_dir": zone_dir, "alt_zone_found": alt_found,
-                           "zone_width_atr": payload["zone_width_atr"]})
+                   checks={"zone_tf": u_tf, "zone_dir": zone_dir, "alt_zone_found": alt_found,
+                           "zone_width_atr": payload["zone_width_atr"], "zone_source": source,
+                           "context_zone_tf": zone_tf})
             print(f"  [shadow] #{wid} {signal.symbol} {direction} → {state}"
-                  + (f" | zone {z_low:.2f}–{z_high:.2f} ({zone_tf} {signal.htf_zone_type})" if has_zone else "")
+                  + (f" | zone {u_low:.2f}–{u_high:.2f} ({u_tf} {u_type}"
+                     + (f" {source}; سياق {zone_tf} {z_low:.2f}–{z_high:.2f})" if use_entry else ")")
+                     if has_zone else "")
                   + (" | بديلة موافقة موجودة" if state == "zone_conflict" and alt_found else ""))
         return wid
     except Exception as e:

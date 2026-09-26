@@ -468,6 +468,68 @@ def test_fvg_formed_after_arrival_confirms():
     assert decs[2].checks["ifvg"] is False and decs[2].checks["rejection"]["ok"] is False
 
 
+# ── fvg كحدث: الفجوة على الشمعة التي تُكمِلها، وعتبة الحجم على نافذة ثابتة ──────
+
+FVG_ZONE = GateZone(low=99.4, high=100.3, direction="demand")
+
+
+def _fvg_case(c1_close, tail=3):
+    """40 شمعة سياق (جسم ~0.4%) + c0=الوصول (موضع 40) + c1 + c2 → فجوة صاعدة (100.2, 100.25)
+    عند الموضع 42، ثم `tail` شموع هادئة (جسم ~0.02%) لا تملأ الفجوة."""
+    rows = _ctx(40)
+    rows += [[100.2, 100.2, 99.5, 99.6, 1000],                                # 40 c0 (high 100.2)
+             [99.6, max(100.9, c1_close + 0.1), 99.55, c1_close, 1000],       # 41 c1
+             [100.3, 100.95, 100.25, 100.9, 1000]]                            # 42 c2 (low 100.25)
+    rows += [[100.9, 100.95, 100.85, 100.92, 1000]] * tail                    # 43.. (low 100.85)
+    return bars(rows)
+
+
+def _mirror(df):
+    m = df.copy()
+    m["Open"], m["Close"] = 200 - df["Open"], 200 - df["Close"]
+    m["High"], m["Low"] = 200 - df["Low"], 200 - df["High"]
+    return m
+
+
+def test_fvg_failing_size_at_completion_never_qualifies_later():
+    # جسم c1 ‏0.70% تحت العتبة الثابتة (~0.84%) لحظة الاكتمال. النافذة القديمة [الوصول−2 … الشمعة]
+    # كانت تهبط عتبتها مع الشموع الهادئة فتؤهّل الفجوة نفسها عند الشمعة ٦ بلا حدث جديد (#88).
+    from market_structure import _find_fvg
+    df = _fvg_case(c1_close=100.3)
+    assert not [g for g in _find_fvg(df.iloc[38:43], limit=10) if g[2] == "bullish"]   # قديم: عند الاكتمال
+    assert [g for g in _find_fvg(df.iloc[38:46], limit=10) if g[2] == "bullish"]       # قديم: عند الشمعة ٦
+    assert not any(eg.fvg_after(df, p, 40, FVG_ZONE, "call") for p in range(40, 46))
+
+
+def test_fvg_counts_only_on_the_completing_bar():
+    df = _fvg_case(c1_close=101.2)                                            # جسم c1 ‏1.6% > العتبة
+    assert eg.fvg_after(df, 42, 40, FVG_ZONE, "call") is True
+    assert eg.fvg_after(df, 43, 40, FVG_ZONE, "call") is False                # الفجوة نفسها بعد شمعة: حالة
+    assert eg.fvg_after(df, 44, 40, FVG_ZONE, "call") is False
+
+
+def test_fvg_threshold_does_not_depend_on_bars_since_arrival():
+    # جسم c1 ‏1.2%: النافذة القديمة ترفضه بوصول عند 40 (عتبة 1.28%) وتقبله بوصول عند 37 (1.10%).
+    for c1_close, want in ((100.3, False), (100.8, True)):
+        df = _fvg_case(c1_close)
+        assert eg.fvg_after(df, 42, 40, FVG_ZONE, "call") is want
+        assert eg.fvg_after(df, 42, 37, FVG_ZONE, "call") is want             # وصول أبكر بثلاث شموع
+
+
+def test_fvg_completed_before_arrival_does_not_count():
+    df = _fvg_case(c1_close=101.2)
+    assert eg.fvg_after(df, 42, 43, FVG_ZONE, "call") is False                # الشمعة قبل الوصول
+    assert eg.fvg_after(df, 43, 43, FVG_ZONE, "call") is False                # الوصول بعد اكتمالها
+
+
+def test_fvg_put_mirror():
+    zone = GateZone(low=200 - FVG_ZONE.high, high=200 - FVG_ZONE.low, direction="supply")
+    fail, ok = _mirror(_fvg_case(100.3)), _mirror(_fvg_case(101.2))
+    assert not any(eg.fvg_after(fail, p, 40, zone, "put") for p in range(40, 46))
+    assert eg.fvg_after(ok, 42, 40, zone, "put") is True
+    assert eg.fvg_after(ok, 43, 40, zone, "put") is False
+
+
 def test_first_confirmation_order():
     assert eg.first_confirmation({"rejection": {"ok": True}, "cisd": True}) == "rejection"
     assert eg.first_confirmation({"rejection": {"ok": False}, "cisd": False, "ifvg": True, "fvg": True}) == "ifvg"

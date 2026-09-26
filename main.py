@@ -115,8 +115,6 @@ def log_signal(signal: SignalResult, sent_ok: bool):
         "delta"      : signal.delta,
         "contracts"  : signal.contracts,
         "regime"         : signal.regime,
-        "smt_divergence" : signal.smt_divergence,
-        "smt_direction"  : signal.smt_direction,
         "sent"           : sent_ok,
         "outcome"    : None,
         "notified"   : False,
